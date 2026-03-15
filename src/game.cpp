@@ -84,12 +84,23 @@ bool Game::Update(HWND hwnd, const float elapsedTime)
 
 	// Render the game
 	{
-		// Show reference image
+		// Clear the drawing board
 		{
-			//uint32_t dispatchWidth = utils::divRoundUp(mTargetWidth, REFOUTPUT_THREADGROUP_SIZE);
-			//uint32_t dispatchHeight = utils::divRoundUp(mTargetHeight, REFOUTPUT_THREADGROUP_SIZE);
+			uavBarrier(mDrawingBuffer);
 
-			//dispatchCompute2D(mReferenceOutputPSO, dispatchWidth, dispatchHeight);
+			uint32_t dispatchWidth = utils::divRoundUp(frameWidth, CLEAR_UAV_THREADGROUP_SIZE);
+			uint32_t dispatchHeight = utils::divRoundUp(frameHeight, CLEAR_UAV_THREADGROUP_SIZE);
+			dispatchCompute2D(mClearDrawingPSO, dispatchWidth, dispatchHeight);
+		}
+
+		// Post processing and write to output
+		{ 
+			uavBarrier(mDrawingBuffer);
+			uavBarrier(mOutputBuffer);
+
+			uint32_t dispatchWidth = utils::divRoundUp(frameWidth, POST_PROCESS_THREADGROUP_SIZE);
+			uint32_t dispatchHeight = utils::divRoundUp(frameHeight, POST_PROCESS_THREADGROUP_SIZE);
+			dispatchCompute2D(mPostProcessPSO, dispatchWidth, dispatchHeight);
 		}
 
 	}
@@ -529,6 +540,14 @@ void Game::createComputePasses()
 
 		SAFE_RELEASE(mPostProcessPSO);
 		mPostProcessPSO = createComputePSO(*shaderBlob, mGlobalRootSignature);
+	}
+
+	// Create main drawing pass
+	{
+		IDxcBlob* shaderBlob = mShaderCompiler.CompileShader(gameShaderFile.c_str(), L"ClearUAV", L"cs_6_2", flagsPointers);
+
+		SAFE_RELEASE(mClearDrawingPSO);
+		mClearDrawingPSO = createComputePSO(*shaderBlob, mGlobalRootSignature);
 	}
 }
 

@@ -24,6 +24,11 @@ cbuffer RootConstantsCB : register(b1)
     RootConstants gRootConstants;
 }
 
+// Output and drawing buffers
+RWTexture2D<float4> DrawingBuffer : register(u0);
+RWTexture2D<float4> OutputBuffer : register(u1);
+
+
 // =========================================================================
 //   String Drawing
 // =========================================================================
@@ -43,13 +48,16 @@ void DrawString(
 // =========================================================================
 
 [shader("compute")]
-[numthreads(DRAW_STRING_THREADGROUP_SIZE, DRAW_STRING_THREADGROUP_SIZE, 1)]
+[numthreads(POST_PROCESS_THREADGROUP_SIZE, POST_PROCESS_THREADGROUP_SIZE, 1)]
 void PostProcess(
     int2 groupID : SV_GroupID,
     int2 groupThreadID : SV_GroupThreadID,
     int2 LaunchIndex : SV_DispatchThreadID)
 {
-	
+    if (LaunchIndex.x >= gData.outputWidth || LaunchIndex.y >= gData.outputHeight)
+        return;
+
+    OutputBuffer[LaunchIndex] = DrawingBuffer[LaunchIndex];
 }
 
 
@@ -64,5 +72,9 @@ void ClearUAV(
     int2 groupThreadID : SV_GroupThreadID,
     int2 LaunchIndex : SV_DispatchThreadID)
 {
-	
+    if (LaunchIndex.x >= gData.outputWidth || LaunchIndex.y >= gData.outputHeight)
+        return;
+
+    const float4 clearColor = float4(1, 0, 0, 0);
+    DrawingBuffer[LaunchIndex] = clearColor;
 }

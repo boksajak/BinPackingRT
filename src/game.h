@@ -92,6 +92,7 @@ private:
 	// PSOs
 	ID3D12PipelineState* mDrawStringPSO = nullptr;
 	ID3D12PipelineState* mPostProcessPSO = nullptr;
+	ID3D12PipelineState* mClearDrawingPSO = nullptr;
 
 	// Shader stuff
 	DxcShaderCompiler mShaderCompiler;
