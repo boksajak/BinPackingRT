@@ -1,6 +1,7 @@
 #include "common.h"
 #include "shaders/shared.h"
 #include "shaderCompiler.h"
+#include "fileSystem.h"
 
 const unsigned int frameWidth = 1920;
 const unsigned int frameHeight = 1080;
@@ -39,7 +40,17 @@ private:
 	ID3D12RootSignature* createRootSignature(const D3D12_ROOT_SIGNATURE_DESC& desc);
 	void createBuffer(ID3D12Device* device, D3D12_HEAP_TYPE heapType, UINT64 alignment, UINT64 size, D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES state, ID3D12Resource** ppResource);
 	void createTexture(ID3D12Device* device, UINT64 width, UINT64 height, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags, D3D12_RESOURCE_STATES state, ID3D12Resource** ppResource);
+	void uploadTexture(ID3D12Resource* texture, void* texels, UINT width, UINT height, UINT bytesPerTexel);
 	void uploadConstantBuffer();
+	void createFontAtlas(int characterHeight, int extraHorizontalSpacing = 0);
+
+	// Strings drawing helpers
+	void createStringBuffer();
+	void updateStringBuffer();
+	void resetStrings();
+	void addString(const std::string& inputString, unsigned int posX, unsigned int posY, glm::vec4 fontColor = glm::vec4(1, 1, 1, 1), glm::vec4 bgColor = glm::vec4(0, 0, 0, 0), bool stringIsCP437 = false, glm::vec4 highlightColor = glm::vec4(0, 0, 0, 0), bool* highlightColorMask = nullptr, size_t highlightColorMaskLength = 0);
+	void addString(const std::string& s, float posX, float posY, glm::vec4 fontColor = glm::vec4(1, 1, 1, 1), glm::vec4 bgColor = glm::vec4(0, 0, 0, 0), bool stringIsCP437 = false, glm::vec4 highlightColor = glm::vec4(0, 0, 0, 0), bool* highlightColorMask = nullptr, size_t highlightColorMaskLength = 0);
+	unsigned int getCenteredTextX(const char* buffer, size_t bufferLength, unsigned int characterWidth, unsigned int frameWidth);
 
 	// Dx12 Constant buffer
 	ID3D12Resource* mGameDataCB = nullptr;
@@ -96,4 +107,22 @@ private:
 
 	// Shader stuff
 	DxcShaderCompiler mShaderCompiler;
+
+	// File system
+	FileSystem mFileSystem;
+
+	// Font atlas stuff
+	ID3D12Resource* mFontTexture = nullptr;
+	const bool kUseCP437FontAtlas = true;
+	const int kFontAtlasCharactersPerSide = 16;
+
+	// Strings drawing stuff
+	ID3D12Resource* mStringBuffer = nullptr; 
+	ID3D12Resource* mStringUploadHeap = nullptr; 
+	uint32_t* mStringData = nullptr;
+	const size_t kMaxStringDataLength = 20 * 1024;
+	size_t mStringDataCurrentOffset = 0;
+
+	// Game Controls
+	bool mRTOn = false;
 };

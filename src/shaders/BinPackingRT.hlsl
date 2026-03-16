@@ -28,6 +28,10 @@ cbuffer RootConstantsCB : register(b1)
 RWTexture2D<float4> DrawingBuffer : register(u0);
 RWTexture2D<float4> OutputBuffer : register(u1);
 
+// Strings rendering
+Texture2D<float4> fontAtlasTexture : register(t0);
+Buffer<uint> stringsBuffer : register(t1);
+
 
 // =========================================================================
 //   String Drawing
@@ -36,17 +40,45 @@ RWTexture2D<float4> OutputBuffer : register(u1);
 [shader("compute")]
 [numthreads(DRAW_STRING_THREADGROUP_SIZE, DRAW_STRING_THREADGROUP_SIZE, 1)]
 void DrawString(
-    int2 groupID : SV_GroupID,
-    int2 groupThreadID : SV_GroupThreadID,
-    int2 LaunchIndex : SV_DispatchThreadID)
+    int3 groupID : SV_GroupID,
+    int3 groupThreadID : SV_GroupThreadID,
+    int3 LaunchIndex : SV_DispatchThreadID)
 {
-	
+	// Load data and sanity checks
+    const int stringIndex = groupID.z;
+    if (stringIndex > gData.stringsCount) return;
+    
+    const StringData stringData = gData.strings[stringIndex];
+    if (LaunchIndex.y >= gData.characterSize.y) return;
+    
+    const uint characterIdx = LaunchIndex.x / gData.characterSize.x;
+    if (characterIdx >= stringData.stringLength) return;
+
+	// Decode character from buffer
+    const uint packedCharacterAtlasPos = stringsBuffer[stringData.stringStartOffset + characterIdx];
+    const uint2 characterAtlasPos = uint2(packedCharacterAtlasPos & 0xFF, (packedCharacterAtlasPos >> 8) & 0x7F);
+
+	// Figure out this texel
+    const uint2 characterTopLeftTexel = characterAtlasPos * uint2(gData.characterSize.x, gData.characterSize.y);
+    const uint2 characterTexel = characterTopLeftTexel + float2(LaunchIndex.x - (LaunchIndex.x / gData.characterSize.x) * gData.characterSize.x, LaunchIndex.y);
+
+	// Decode highlighted chars
+    const float4 color = (packedCharacterAtlasPos >> 15) ? stringData.highlightColor : stringData.fontColor;
+
+	// Read from font atlas and apply string color
+    float4 result = float4(fontAtlasTexture[characterTexel].rrrr) * color;
+
+	// Apply backround assuming premultiplied alpha
+    result = stringData.backgroundColor * (1 - result.a) + result;
+
+	// Blend into back buffer (assume premultiplied alpha again)
+    const float4 currentPixel = DrawingBuffer[LaunchIndex.xy + stringData.screenPosition];
+    DrawingBuffer[LaunchIndex.xy + stringData.screenPosition] = currentPixel * (1 - result.a) + result;
 }
 
 // =========================================================================
 //   Post process
 // =========================================================================
-
 
 float vignette(float2 uvs)
 {
@@ -113,8 +145,8 @@ float3 crtGrid(float3 color, float2 uvs, uint2 textureSize)
     const float hBarSharpness = 1.0f;
     const float vBarSharpness = 1.5f;
     const float crtExposureCompensation = 1.15f;
-    const float hBarScale = (PI * 0.5f) * gData.outputHeight;
-    const float vBarScale = (PI) * gData.outputWidth;
+    const float hBarScale = HALF_PI * gData.outputHeight;
+    const float vBarScale = PI * gData.outputWidth;
     
     float horizontalBar = lerp(hBarMin, 1, bar(uvs.y, hBarScale, hBarSharpness));
     float verticalBar = lerp(vBarMin, 1, saturate(bar(uvs.x, vBarScale, vBarSharpness)));
@@ -131,12 +163,11 @@ void PostProcess(
     if (LaunchIndex.x >= gData.outputWidth || LaunchIndex.y >= gData.outputHeight)
         return;
     
-    float2 textureSizeRcp = float2(1.0f / float(gData.outputWidth), 1.0f / float(gData.outputHeight));
-    float2 uvs = float2(LaunchIndex) * textureSizeRcp;
+    const float2 textureSizeRcp = float2(1.0f / float(gData.outputWidth), 1.0f / float(gData.outputHeight));
+    const float2 uvs = float2(LaunchIndex) * textureSizeRcp;
 
     OutputBuffer[LaunchIndex] = float4(vignette(uvs) * crtGrid(colorGrading(DrawingBuffer[LaunchIndex].rgb), uvs, uint2(gData.outputWidth, gData.outputHeight)), 1);
 }
-
 
 // =========================================================================
 //   Buffer Clearing

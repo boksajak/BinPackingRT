@@ -24,3 +24,4 @@ This project uses following dependencies:
 * [STB library](https://github.com/nothings/stb/), provided with an MIT license.
 * [DXC Compiler](https://github.com/microsoft/DirectXShaderCompiler), provided with an University of Illinois Open Source
 * [GLM library](https://github.com/g-truc/glm), provided with an MIT license.
+* [More Perfect DOS VGA font](http://laemeur.sdf.org/fonts/), free for all to use.

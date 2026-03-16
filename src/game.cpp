@@ -1,6 +1,9 @@
 #include "game.h"
 #include "utils.h"
 
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb_truetype.h"
+
 /**
 * This enum specifies a layout of resources in NN shaders
 */
@@ -9,6 +12,7 @@ enum class DescriptorHeapConstants {
 	// List of resources declared in the shader, as they appear in the descriptors heap
 	GameDataCB = 0,
 	FontAtlas,
+	StringsBuffer,
 	DrawingBuffer,
 	OutputBuffer,
 	UAV1,
@@ -31,7 +35,7 @@ enum class DescriptorHeapConstants {
 
 	// SRV space 0 range
 	SRV0Start = FontAtlas,
-	SRV0End = FontAtlas,
+	SRV0End = StringsBuffer,
 	SRV0Total = SRV0End - SRV0Start + 1,
 };
 
@@ -43,8 +47,19 @@ enum class RootParameterIndex {
 
 void Game::Initialize(HWND hwnd)
 {
+	mGameData.stringsCount = 0;
+	mGameData.frameNumber = 0;
+	mStringData = nullptr;
+
+#ifdef _DEBUG
+	mFileSystem.initDevelopment();
+#else
+	mFileSystem.initUseBigFile(L"stuff.bin");
+#endif
+
 	mShaderCompiler.Initialize();
 	initializeDx12(hwnd);
+	createFontAtlas(32, 1);
 }
 
 void Game::ReloadShaders() {
@@ -53,6 +68,31 @@ void Game::ReloadShaders() {
 
 bool Game::Update(HWND hwnd, const float elapsedTime)
 {
+	// Prepare game GUI
+	{
+		resetStrings();
+
+		// Set margins and layout parameters
+		float top = 0.05f;
+		float left = 0.05f;
+		float right = 0.05f;
+		float bottom = 0.05f;
+
+		int characterWidth = mGameData.characterSize.x;
+		int characterHeight = mGameData.characterSize.y;
+		const float characterWidthRelative = float(characterWidth) / frameWidth;
+		const float characterHeightRelative = float(characterHeight) / frameHeight;
+
+		// Draw header
+		float headerPosY = top;
+		std::string header = "============================= Bin Packing Path Traced =============================";
+		addString(header, getCenteredTextX(header.c_str(), header.length(), characterWidth, frameWidth), unsigned int(headerPosY * frameHeight));
+
+		// Draw footer
+		std::string footer = "Refracted Ray \1 " + std::string(mRTOn ? "2026" : "1989");
+		addString(footer, left, 1.0f - bottom - characterHeightRelative);
+
+	}
 
 	// Update constant buffer
 	{
@@ -62,6 +102,11 @@ bool Game::Update(HWND hwnd, const float elapsedTime)
 		uploadConstantBuffer();
 
 		mGameData.frameNumber++;
+	}
+
+	// Update strings buffer
+	{
+		updateStringBuffer();
 	}
 
 	// Setup root signature
@@ -91,6 +136,22 @@ bool Game::Update(HWND hwnd, const float elapsedTime)
 			uint32_t dispatchWidth = utils::divRoundUp(frameWidth, CLEAR_UAV_THREADGROUP_SIZE);
 			uint32_t dispatchHeight = utils::divRoundUp(frameHeight, CLEAR_UAV_THREADGROUP_SIZE);
 			dispatchCompute2D(mClearDrawingPSO, dispatchWidth, dispatchHeight);
+		}
+
+		// Render strings
+		if (mGameData.stringsCount > 0)
+		{
+			uavBarrier(mDrawingBuffer);
+
+			uint32_t dispatchWidth = 1;
+			uint32_t dispatchHeight = 1;
+			for (uint32_t i = 0; i < mGameData.stringsCount; i++) {
+				dispatchWidth = glm::max(dispatchWidth, utils::divRoundUp(mGameData.characterSize.x * mGameData.strings[i].stringLength, DRAW_STRING_THREADGROUP_SIZE));
+				dispatchHeight = glm::max(dispatchHeight, utils::divRoundUp(mGameData.characterSize.y, DRAW_STRING_THREADGROUP_SIZE));
+			}
+
+			mCmdList->SetPipelineState(mDrawStringPSO);
+			mCmdList->Dispatch(dispatchWidth, dispatchHeight, mGameData.stringsCount);
 		}
 
 		// Post processing and write to output
@@ -142,8 +203,125 @@ bool Game::Update(HWND hwnd, const float elapsedTime)
 
 void Game::Cleanup()
 {
+	SAFE_DELETE_ARRAY(mStringData);
+	mFileSystem.Cleanup();
 }
 
+void Game::resetStrings() {
+	mStringDataCurrentOffset = 0;
+	mGameData.stringsCount = 0;
+}
+
+void Game::addString(const std::string& inputString, unsigned int posX, unsigned int posY, glm::vec4 fontColor, glm::vec4 bgColor, bool stringIsCP437, glm::vec4 highlightColor, bool* highlightColorMask, size_t highlightColorMaskLength)
+{
+	// Split multi-line string
+	size_t stringPos = 0;
+	size_t newLinePos = 0;
+	size_t processedChars = 0;
+
+	while (stringPos < inputString.length()) {
+		std::string s;
+		newLinePos = inputString.find("\n", stringPos);
+		if (newLinePos == std::string::npos) {
+			s = inputString.substr(stringPos);
+			stringPos = inputString.length();
+		}
+		else {
+			s = inputString.substr(stringPos, newLinePos - stringPos);
+			stringPos = newLinePos + 1;
+		}
+
+		if (s.length() == 0) return;
+		if (mGameData.stringsCount == MAX_STRINGS_COUNT) {
+			utils::validate(E_FAIL, L"You're trying to add more strings than the limit set by 'MAX_STRINGS_COUNT'.");
+			return;
+		}
+
+		if (mStringDataCurrentOffset + s.length() > kMaxStringDataLength) {
+			utils::validate(E_FAIL, L"Combined strings size was above the limit set by 'kMaxStringDataLength'.");
+			return;
+		}
+
+		mGameData.strings[mGameData.stringsCount].stringLength = (uint32_t)s.length();
+		mGameData.strings[mGameData.stringsCount].screenPosition = glm::uvec2(posX, posY);
+		mGameData.strings[mGameData.stringsCount].stringStartOffset = (uint32_t)mStringDataCurrentOffset;
+
+		for (size_t i = 0; i < s.length(); i++) {
+
+			int codepoint = (kUseCP437FontAtlas && !stringIsCP437) ? utils::mapCharToCP437(s[i]) : s[i];
+			if (codepoint < 0) codepoint += 256;
+			if (codepoint > 255) utils::validate(E_FAIL, L"Trying to render unsupported character.");
+
+			uint8_t characterAtlasPosX = codepoint % kFontAtlasCharactersPerSide;
+			uint8_t characterAtlasPosY = codepoint / kFontAtlasCharactersPerSide;
+
+			// Encode highlight color as highest but in characterAtlasPosY
+			if (highlightColorMask != nullptr) {
+				if (highlightColorMask[(processedChars + i) % highlightColorMaskLength]) characterAtlasPosY |= (1 << 7);
+			}
+
+			mStringData[mStringDataCurrentOffset++] = characterAtlasPosX + (characterAtlasPosY << 8);
+		}
+
+		// Pre-multiply alpha
+		mGameData.strings[mGameData.stringsCount].fontColor = glm::vec4(fontColor.x * fontColor.a, fontColor.y * fontColor.a, fontColor.z * fontColor.a, fontColor.a);
+		mGameData.strings[mGameData.stringsCount].backgroundColor = glm::vec4(bgColor.x * bgColor.a, bgColor.y * bgColor.a, bgColor.z * bgColor.a, bgColor.a);
+		mGameData.strings[mGameData.stringsCount].highlightColor = glm::vec4(highlightColor.x * highlightColor.a, highlightColor.y * highlightColor.a, highlightColor.z * highlightColor.a, highlightColor.a);
+
+		processedChars = stringPos;
+		mGameData.stringsCount++;
+		posY += mGameData.characterSize.y;
+	}
+}
+
+void Game::addString(const std::string& s, float posX, float posY, glm::vec4 fontColor, glm::vec4 bgColor, bool stringIsCP437, glm::vec4 highlightColor, bool* highlightColorMask, size_t highlightColorMaskLength)
+{
+	addString(s, unsigned int(posX * frameWidth), unsigned int(posY * frameHeight), fontColor, bgColor, stringIsCP437, highlightColor, highlightColorMask, highlightColorMaskLength);
+}
+
+void Game::createStringBuffer()
+{
+	SAFE_DELETE_ARRAY(mStringData);
+	mStringData = new uint32_t[kMaxStringDataLength];
+	
+	// Allocate string buffer
+	createBuffer(mDevice, D3D12_HEAP_TYPE_DEFAULT, 0, kMaxStringDataLength * sizeof(uint32_t), D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &mStringBuffer);
+
+	// Create upload heap
+	const UINT64 uploadBufferSize = GetRequiredIntermediateSize(mStringBuffer, 0, 1);
+	createBuffer(mDevice, D3D12_HEAP_TYPE_UPLOAD, 0, uploadBufferSize, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, &mStringUploadHeap);
+
+	// Create UAV for loss data buffer
+	{
+		D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+		uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+		uavDesc.Buffer.NumElements = kMaxStringDataLength;
+		uavDesc.Buffer.StructureByteStride = sizeof(uint32_t);
+		uavDesc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+
+		mDevice->CreateUnorderedAccessView(mStringBuffer, nullptr, &uavDesc, getDescriptorHandle(UINT(DescriptorHeapConstants::StringsBuffer)));
+	}
+}
+
+void Game::updateStringBuffer() 
+{
+	transitionBarrier(mStringBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+
+	D3D12_SUBRESOURCE_DATA stringDataDesc = {};
+	stringDataDesc.pData = mStringData;
+	stringDataDesc.RowPitch = kMaxStringDataLength * sizeof(uint32_t);
+	stringDataDesc.SlicePitch = stringDataDesc.RowPitch;
+	
+	UpdateSubresources(mCmdList, mStringBuffer, mStringUploadHeap, 0, 0, 1, &stringDataDesc);
+	transitionBarrier(mStringBuffer, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+}
+
+unsigned int Game::getCenteredTextX(const char* buffer, size_t bufferLength, unsigned int characterWidth, unsigned int frameWidth)
+{
+	size_t numChars = strnlen_s(buffer, bufferLength);
+	return (frameWidth - unsigned int(numChars) * characterWidth) / 2;
+}
 
 ID3D12PipelineState* Game::createComputePSO(IDxcBlob& shaderBlob, ID3D12RootSignature* rootSignature)
 {
@@ -248,7 +426,6 @@ D3D12_CPU_DESCRIPTOR_HANDLE Game::getBackBufferView(UINT bufferIndex) {
 D3D12_CPU_DESCRIPTOR_HANDLE Game::getCurrentBackBufferView() {
 	return getBackBufferView(mCurrentFrameIndex);
 }
-
 
 void Game::transitionBarrier(ID3D12Resource* resource, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
 	D3D12_RESOURCE_BARRIER barrier = {};
@@ -455,6 +632,27 @@ void Game::createTexture(ID3D12Device* device, UINT64 width, UINT64 height, DXGI
 	utils::validate(hr, L"Error: failed to create texture!");
 }
 
+void Game::uploadTexture(ID3D12Resource* texture, void* texels, UINT width, UINT height, UINT bytesPerTexel)
+{
+	const UINT64 uploadBufferSize = GetRequiredIntermediateSize(texture, 0, 1);
+
+	// Create the upload heap
+	ID3D12Resource* textureUploadBuffer = nullptr;
+	createBuffer(mDevice, D3D12_HEAP_TYPE_UPLOAD, 0, uploadBufferSize, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, &textureUploadBuffer);
+
+	D3D12_SUBRESOURCE_DATA textureData = {};
+	textureData.pData = texels;
+	textureData.RowPitch = width * bytesPerTexel;
+	textureData.SlicePitch = textureData.RowPitch * height;
+
+	// Schedule a copy from the upload heap to the Texture2D resource
+	UpdateSubresources(mCmdList, texture, textureUploadBuffer, 0, 0, 1, &textureData);
+
+	transitionBarrier(texture, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+	// TODO: release textureUploadBuffer
+}
+
 void Game::createBuffers()
 {
 	// Create output and drawing buffer
@@ -471,6 +669,11 @@ void Game::createBuffers()
 		UINT64 uploadBufferSize = GetRequiredIntermediateSize(mGameDataCB, 0, 1);
 		uploadBufferSize = ALIGN(D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT, uploadBufferSize);
 		createBuffer(mDevice, D3D12_HEAP_TYPE_UPLOAD, 0, uploadBufferSize, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_GENERIC_READ, &mGameDataCBUpload);
+	}
+
+	// Strings rendering buffers
+	{
+		createStringBuffer();
 	}
 
 	// Fill descriptor heap
@@ -518,6 +721,7 @@ void Game::createComputePasses()
 	std::vector<std::wstring> compilerFlags;
 
 	compilerFlags.push_back(L"/D PI=" + std::to_wstring(glm::pi<float>()));
+	compilerFlags.push_back(L"/D HALF_PI=" + std::to_wstring(glm::half_pi<float>()));
 
 	// Process compiler flags to an array of string pointers
 	std::vector<LPCWSTR> flagsPointers;
@@ -549,6 +753,125 @@ void Game::createComputePasses()
 		SAFE_RELEASE(mClearDrawingPSO);
 		mClearDrawingPSO = createComputePSO(*shaderBlob, mGlobalRootSignature);
 	}
+}
+
+void Game::createFontAtlas(int characterHeight, int extraHorizontalSpacing)
+{
+	// Create atlas using STB Truetype lib
+	stbtt_fontinfo font;
+
+	FileHandle fontFile = mFileSystem.openFile(L"assets\\MorePerfectDOSVGA.ttf");
+
+	unsigned char* fontFileData = mFileSystem.readAll(fontFile);
+	stbtt_InitFont(&font, fontFileData, 0);
+
+	// Get font metrics
+	float scale;
+	int ascent, baseline;
+	scale = stbtt_ScaleForPixelHeight(&font, float(characterHeight));
+	stbtt_GetFontVMetrics(&font, &ascent, 0, 0);
+	baseline = (int)(ascent * scale);
+
+	// Figure out the maximal character width for selected character height
+	// !! Hack: Only consider characters with codes up to 127 (not 255). Those are most used
+	// and we don't want the weird extra characters in range 128-255 to deform our atlas
+	int characterWidth = 0;
+	int maxCharacterHeight = 0;
+	for (int charIndex = 0; charIndex < 128; charIndex++) {
+		int codepoint = kUseCP437FontAtlas ? utils::mapCharToCP437(charIndex) : charIndex;
+		int x0, y0, x1, y1;
+		stbtt_GetCodepointBitmapBoxSubpixel(&font, codepoint, scale, scale, 0, 0, &x0, &y0, &x1, &y1);
+		characterWidth = std::max(characterWidth, x1 - x0 + extraHorizontalSpacing);
+		maxCharacterHeight = std::max(maxCharacterHeight, y1 - y0);
+	}
+
+	if (characterWidth == 0 || maxCharacterHeight == 0) utils::validate(E_FAIL, L"Couldn't figure out a maximal size of characters in selected font!");
+
+	const int fontAtlasWidth = kFontAtlasCharactersPerSide * characterWidth;
+	const int fontAtlasHeight = kFontAtlasCharactersPerSide * characterHeight;
+
+	unsigned char* fontAtlasRawData = new unsigned char[fontAtlasWidth * fontAtlasHeight];
+
+	// Make glyph buffer double the necessary size to support glyphs that extend outside, or aren't centered in their box
+	int glyphBufferWidth = characterWidth * 2;
+	int glyphBufferHeight = maxCharacterHeight * 2;
+	unsigned char* glyphBuffer = new unsigned char[glyphBufferWidth * glyphBufferHeight];
+
+	// Render glyphs from 0 to 255
+	for (int charIndex = 0; charIndex < 256; charIndex++) {
+
+		int codepoint = kUseCP437FontAtlas ? utils::mapCharToCP437(charIndex) : charIndex;
+
+		// Clear the glyph data
+		memset(glyphBuffer, 0, glyphBufferWidth * glyphBufferHeight);
+
+		// Get glyph metrics (size and origin). Apply shift along X axis if desired
+		float xpos = float(extraHorizontalSpacing / 2); //< Shift in X axis. Divide the integer (not float) to prevent subpixel movements that can cause blur
+		int advance, lsb, x0, y0, x1, y1;
+		float x_shift = xpos - (float)floor(xpos);
+
+		stbtt_GetCodepointHMetrics(&font, codepoint, &advance, &lsb);
+		stbtt_GetCodepointBitmapBoxSubpixel(&font, codepoint, scale, scale, x_shift, 0, &x0, &y0, &x1, &y1);
+		int glyphWidth = x1 - x0;
+		int glyphHeight = y1 - y0;
+		int glyphOriginX = (int)xpos + x0;
+		int glyphOriginY = baseline + y0;
+
+		// Calculate glyph box position, centered in the glyph buffer (might extend outside)
+		int glyphBoxPosX = (glyphBufferWidth - characterWidth) / 2;
+		int glyphBoxPosY = (glyphBufferHeight - characterHeight) / 2;
+
+		// Calculate glyph origin in glyph buffer, may be outside of its box (extending to neighbouring characters or lines), but must be inside of temp. glyph buffer
+		int glyphBufferOriginX = glyphBoxPosX + glyphOriginX;
+		int glyphBufferOriginY = glyphBoxPosY + glyphOriginY;
+
+		if (glyphBufferOriginX < 0 || glyphBufferOriginY < 0) utils::validate(E_FAIL, L"Glyph rendering failed, origin was outside of the temp. buffer!");
+
+		// Rasterize glyph into temp. glpyh buffer
+		unsigned char* glyphBufferPtr = glyphBuffer + (glyphBufferOriginY * glyphBufferWidth) + glyphBufferOriginX;
+		if (glyphWidth > 0 && glyphHeight > 0) stbtt_MakeCodepointBitmapSubpixel(&font, glyphBufferPtr, glyphWidth, glyphHeight, glyphBufferWidth, scale, scale, x_shift, 0, codepoint);
+
+		// Copy glyph to atlas (or alpha-blend into string texture)
+		int glyphAtlasX = (charIndex % kFontAtlasCharactersPerSide) * characterWidth;
+		int glyphAtlasY = (charIndex / kFontAtlasCharactersPerSide) * characterHeight;
+		int lineWidth = kFontAtlasCharactersPerSide * characterWidth;
+
+		// Copy glyph to atlas, note that this chops off glyph areas that extend out of its box!
+		for (int x = 0; x < characterWidth; x++) {
+			for (int y = 0; y < characterHeight; y++) {
+
+				auto atlasAddress = (glyphAtlasX + x) + ((glyphAtlasY + y) * lineWidth);
+				fontAtlasRawData[atlasAddress] = *(glyphBuffer + (glyphBoxPosY + y) * glyphBufferWidth + glyphBoxPosX + x);
+
+#if 0
+				// Draw bounding box for debugging
+				if (x == 0 || y == 0 || x == characterWidth - 1 || y == characterHeight - 1) fontAtlasRawData[atlasAddress] = 60;
+#endif
+			}
+		}
+	}
+
+	// Remember dimensions of characters in created atlas
+	mGameData.characterSize.y = characterHeight;
+	mGameData.characterSize.x = characterWidth;
+
+	// Allocate font atlas
+	createTexture(mDevice, fontAtlasWidth, fontAtlasHeight, DXGI_FORMAT_R8_UNORM, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, &mFontTexture);
+	uploadTexture(mFontTexture, fontAtlasRawData, fontAtlasWidth, fontAtlasHeight, 1);
+
+	// Create SRV for font atlas texture
+	{
+		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = { };
+		srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MipLevels = 1;
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+		mDevice->CreateShaderResourceView(mFontTexture, &srvDesc, getDescriptorHandle(UINT(DescriptorHeapConstants::FontAtlas)));
+	}
+
+	// TODO: release fontAtlasRawData
 }
 
 void Game::initializeDx12(HWND hwnd)

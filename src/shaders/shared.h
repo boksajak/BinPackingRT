@@ -26,13 +26,33 @@ typedef glm::mat4 float4x4;
 
 #endif
 
+#define MAX_STRINGS_COUNT 256
+
+struct StringData
+{
+	float4 fontColor;
+	float4 backgroundColor;
+	float4 highlightColor;
+
+	uint2 screenPosition;
+	uint stringLength;
+	uint stringStartOffset;
+};
 
 struct GameData
 {
+	// General
 	uint frameNumber;
 	uint outputWidth;
 	uint outputHeight;
 	uint pad;
+
+	// Strings drawing
+	StringData strings[MAX_STRINGS_COUNT];
+
+	uint2 characterSize;
+	uint stringsCount;
+	uint pad2;
 };
 
 

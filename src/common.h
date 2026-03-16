@@ -26,8 +26,9 @@
 #include "dxcapi.h"
 
 // STB library
-//#include "stb_image.h"
+#include "stb_truetype.h"
 
 // Dx12 helpers
 #define SAFE_RELEASE( x ) { if ( x ) { x->Release(); x = NULL; } }
 #define ALIGN(_alignment, _val) (((_val + _alignment - 1) / _alignment) * _alignment)
+#define SAFE_DELETE_ARRAY( x ) { if ( x ) { delete[] x; x = NULL; } }
