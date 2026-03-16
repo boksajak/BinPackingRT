@@ -10,7 +10,13 @@ void Game::Initialize(HWND hwnd)
 #endif
 
 	mRenderer.Initialize(hwnd, mFileSystem);
+	mAudio.Initialize(hwnd);
 
+	// Load sounds
+	for (int i = 0; i < _countof(mSoundFiles); i++)
+	{
+		mSoundHandles[i] = mAudio.LoadSound(mFileSystem, L"assets\\" + mSoundFiles[i].second);
+	}
 }
 
 void Game::ReloadShaders() 
@@ -54,6 +60,12 @@ bool Game::Update(HWND hwnd, const float elapsedTime)
 
 void Game::Cleanup()
 {
+	mAudio.Cleanup();
 	mRenderer.Cleanup();
 	mFileSystem.Cleanup();
+}
+
+void Game::sound(SoundEffect s)
+{
+	mAudio.SoundPlay(mSoundHandles[size_t(s)]);
 }

@@ -14,7 +14,7 @@ void FileSystem::initUseBigFile(std::wstring bigFileName) {
 
 	FILE* file;
 	if (_wfopen_s(&file, (basePath + bigFileName).c_str(), L"rb")) {
-		MessageBox(NULL, L"Did you remove stuff.bin?!", L"Error", MB_OK);
+		MessageBox(NULL, L"Did you remove stuff.bin file?!", L"Error", MB_OK);
 		PostQuitMessage(EXIT_FAILURE);
 	}
 
@@ -48,7 +48,7 @@ void FileSystem::Cleanup()
 
 	if (isDevelopmentMode)
 	{
-		dumpTheBigFile(L"stuff.bin");
+		dumpTheBigFile(this->basePath + L"stuff.bin");
 	}
 
 	for (auto file : files) {

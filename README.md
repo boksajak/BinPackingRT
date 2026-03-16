@@ -25,3 +25,4 @@ This project uses following dependencies:
 * [DXC Compiler](https://github.com/microsoft/DirectXShaderCompiler), provided with an University of Illinois Open Source
 * [GLM library](https://github.com/g-truc/glm), provided with an MIT license.
 * [More Perfect DOS VGA font](http://laemeur.sdf.org/fonts/), free for all to use.
+* Sounds made with [Leshy SFMaker](https://www.leshylabs.com/apps/sfMaker/)
