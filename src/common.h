@@ -32,3 +32,6 @@
 #define SAFE_RELEASE( x ) { if ( x ) { x->Release(); x = NULL; } }
 #define ALIGN(_alignment, _val) (((_val + _alignment - 1) / _alignment) * _alignment)
 #define SAFE_DELETE_ARRAY( x ) { if ( x ) { delete[] x; x = NULL; } }
+
+const unsigned int frameWidth = 1920;
+const unsigned int frameHeight = 1080;
