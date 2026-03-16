@@ -50,6 +50,147 @@ private:
 
 	void sound(SoundEffect s);
 
+	// Blocks
+	enum class BlockRotation {
+		ROT_0,
+		ROT_90,
+		ROT_180,
+		ROT_270,
+		COUNT
+	};
+	const bool(*mActiveBlock)[4];
+	unsigned char mActiveBlockMaterialIndex;
+	glm::ivec2 blockPosition;
+	glm::ivec2 blockSize;
+	BlockRotation blockRotation;
+	glm::ivec2 nextBlockSize;
+	BlockRotation nextBlockRotation;
+
+	const bool mono[4][4] = { true,  false, false, false,
+						  false, false, false, false,
+						  false, false, false, false,
+						  false, false, false, false, };
+
+	const bool duo[4][4] = { true,  true,  false, false,
+							  false, false, false, false,
+							  false, false, false, false,
+							  false, false, false, false, };
+
+	const bool T[4][4] = { true,  true,  true,  false,
+							  false, true,  false, false,
+							  false, false, false, false,
+							  false, false, false, false, };
+
+	const bool I[4][4] = { true,  false,  false,  false,
+							  true, false,  false, false,
+							  true, false, false, false,
+							  true, false, false, false, };
+
+	const bool L[4][4] = { true,  true,  true,  false,
+								false, false,  true, false,
+								false, false, false, false,
+								false, false, false, false, };
+
+	const bool J[4][4] = { true,  true,  true,  false,
+								true, false,  false, false,
+								false, false, false, false,
+								false, false, false, false, };
+
+	const bool O[4][4] = { true,  true,  false,  false,
+								true, true,  false, false,
+								false, false, false, false,
+								false, false, false, false, };
+
+	const bool spaceship[4][4] = { true,  true,  true,  true,
+								false, true,  true, false,
+								false, false, false, false,
+								false, false, false, false, };
+
+	const bool Z[4][4] = { true,  true,  false,  false,
+								false, true,  true, false,
+								false, false, false, false,
+								false, false, false, false, };
+
+	const bool S[4][4] = { false,  true,  true,  false,
+								true, true,  false, false,
+								false, false, false, false,
+								false, false, false, false, };
+
+	struct Block {
+		const bool(*shapeData)[4];
+	} blocks[10] = { mono, duo, T, I, L, J, O, spaceship, Z, S };
+
+	Block mNextBlock;
+
+	// Playing field
+	static const unsigned int kFieldWidth = 20;
+	static const unsigned int kFieldHeight = 20;
+	unsigned char mField[kFieldWidth][kFieldHeight];
+	unsigned char mPreviousField[kFieldWidth][kFieldHeight];
+	char* mPlayingFieldStringBuffer = nullptr;
+	bool* mPlayingFieldHighlightColorMask = nullptr;
+
+	// RT stuff
+	unsigned int mRtFieldPixelsWidth;
+	unsigned int mRtFieldPixelsHeight;
+	unsigned int mRtFieldCharactersWidth;
+
 	// Game Controls
+	bool mEnableSounds = true;
 	bool mRTOn = false;
+
+	// Game state and input
+	enum class GameState {
+		NOT_STARTED,
+		RUNNING,
+		GAME_OVER_WAIT,
+		GAME_OVER,
+		PAUSE
+	} mGameState;
+
+	enum class UserInput {
+		NOTHING,
+		START_GAME,
+		LEFT,
+		RIGHT,
+		ROTATE,
+		DROP,
+		PAUSE,
+		LEVEL_UP,
+		LEVEL_DOWN,
+		UNDO,
+		TOGGLE_MUTE,
+	} userInput;
+
+	unsigned int mScore;
+	unsigned int mLevel;
+	unsigned int mRemovedLinesOnThisLevel;
+	unsigned int mUndosLeft = 0;
+
+	// Gameplay
+	void initializeGame();
+	void clearPlayingField();
+	char* playingFieldToString(bool*& highlightColorMask, size_t& highlightColorMaskLength, unsigned int rtFieldCharactersWidth);
+	glm::ivec2 getBlockOffset(int i, int j, glm::ivec2 size, BlockRotation rotation);
+	char* nextBlockToString();
+	bool getOverlayText(char* bufferA, size_t bufferLengthA, char* bufferB, size_t bufferLengthB);
+
+	// Rendering chars
+	// Special chars (in CP437)
+	const char kTopLeftCornerChar = char(201);
+	const char kHorizontalDoubleBarChar = char(205);
+	const char kTopRightCornerChar = char(187);
+	const char kVerticalDoubleBarChar = char(186);
+	const char kBottomLeftCornerChar = char(200);
+	const char kBottomRightCornerChar = char(188);
+	const char kCenterDotChar = char(250);
+	const char kCenterBlockChar = char(254);
+	const char kHalfBlockTopChar = char(223);
+	const char kHalfBlockRightChar = char(222);
+	const char kHalfBlockLeftChar = char(221);
+	const char kBlockSolidChar = char(219);
+	const char kBlockLightChar = char(176);
+	const char kBlockMediumChar = char(177);
+	const char kBlockDarkChar = char(178);
+
 };

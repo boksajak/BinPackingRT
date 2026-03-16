@@ -183,6 +183,6 @@ void ClearUAV(
     if (LaunchIndex.x >= gData.outputWidth || LaunchIndex.y >= gData.outputHeight)
         return;
 
-    const float4 clearColor = float4(1, 0, 0, 0);
+    const float4 clearColor = float4(0, 0, 0, 0);
     DrawingBuffer[LaunchIndex] = clearColor;
 }
