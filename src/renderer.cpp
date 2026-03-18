@@ -94,7 +94,9 @@ void Renderer::Initialize(HWND hwnd, FileSystem& fileSystem, unsigned int fieldW
 	mFieldWidth = fieldWidth;
 	mFieldHeight = fieldHeight;
 
+#ifdef _DEBUG
 	mShaderCompiler.Initialize();
+#endif
 
 	initializeDx12(hwnd, fileSystem);
 }
@@ -333,10 +335,10 @@ bool Renderer::Update(HWND hwnd, const float elapsedTime, unsigned int playingFi
 	resetCommandList();
 
 	// Reload shaders here if needed
-	if (mReloadShaders) {
-		createComputePasses();
-		mReloadShaders = false;
-	}
+	//if (mReloadShaders) {
+	//	createComputePasses(fileSystem);
+	//	mReloadShaders = false;
+	//}
 
 	return true;
 }
@@ -850,7 +852,7 @@ void Renderer::createBuffers()
 	}
 }
 
-void Renderer::createComputePasses()
+void Renderer::createComputePasses(FileSystem& fileSystem)
 {
 	const std::wstring shaderName = L"BinPackingRT.hlsl";
 	std::wstring shaderFolder = utils::getExePath() + L"shaders\\";
@@ -888,9 +890,11 @@ void Renderer::createComputePasses()
 		flagsPointers.push_back(flag.c_str());
 	}
 
+#ifdef _DEBUG
 	// Create main drawing pass
 	{
 		IDxcBlob* shaderBlob = mShaderCompiler.CompileShader(gameShaderFile.c_str(), L"DrawString", L"cs_6_2", flagsPointers);
+		fileSystem.LoadAsFile(L"DrawStringsShader", shaderBlob->GetBufferSize(), shaderBlob->GetBufferPointer());
 
 		SAFE_RELEASE(mDrawStringPSO);
 		mDrawStringPSO = createComputePSO(*shaderBlob, mGlobalRootSignature);
@@ -899,6 +903,7 @@ void Renderer::createComputePasses()
 	// Create post-process pass
 	{
 		IDxcBlob* shaderBlob = mShaderCompiler.CompileShader(gameShaderFile.c_str(), L"PostProcess", L"cs_6_2", flagsPointers);
+		fileSystem.LoadAsFile(L"PostProcessShader", shaderBlob->GetBufferSize(), shaderBlob->GetBufferPointer());
 
 		SAFE_RELEASE(mPostProcessPSO);
 		mPostProcessPSO = createComputePSO(*shaderBlob, mGlobalRootSignature);
@@ -907,6 +912,7 @@ void Renderer::createComputePasses()
 	// Create main drawing pass
 	{
 		IDxcBlob* shaderBlob = mShaderCompiler.CompileShader(gameShaderFile.c_str(), L"ClearUAV", L"cs_6_2", flagsPointers);
+		fileSystem.LoadAsFile(L"ClearDrawingShader", shaderBlob->GetBufferSize(), shaderBlob->GetBufferPointer());
 
 		SAFE_RELEASE(mClearDrawingPSO);
 		mClearDrawingPSO = createComputePSO(*shaderBlob, mGlobalRootSignature);
@@ -915,6 +921,7 @@ void Renderer::createComputePasses()
 	// Create path tracing pass
 	{
 		IDxcBlob* shaderBlob = mShaderCompiler.CompileShader(gameShaderFile.c_str(), L"", L"lib_6_3", flagsPointers);
+		fileSystem.LoadAsFile(L"RayTracingShader", shaderBlob->GetBufferSize(), shaderBlob->GetBufferPointer());
 
 		createRaytracingPSO(shaderBlob);
 	}
@@ -922,11 +929,37 @@ void Renderer::createComputePasses()
 	// Create denoising pass
 	{
 		IDxcBlob* shaderBlob = mShaderCompiler.CompileShader(gameShaderFile.c_str(), L"Denoise", L"cs_6_2", flagsPointers);
+		fileSystem.LoadAsFile(L"DenoisingShader", shaderBlob->GetBufferSize(), shaderBlob->GetBufferPointer());
 
 		SAFE_RELEASE(mDenoisingPSO);
 		mDenoisingPSO = createComputePSO(*shaderBlob, mGlobalRootSignature);
 	}
 
+#else
+	CustomBlob drawStringsBlob = readShaderBlobFromFile(fileSystem, L"DrawStringsShader");
+	CustomBlob postProcessBlob = readShaderBlobFromFile(fileSystem, L"PostProcessShader");
+	CustomBlob clearDrawingBlob = readShaderBlobFromFile(fileSystem, L"ClearDrawingShader");
+	CustomBlob rayTracingBlob = readShaderBlobFromFile(fileSystem, L"RayTracingShader");
+	CustomBlob denoisingBlob = readShaderBlobFromFile(fileSystem, L"DenoisingShader");
+
+	mDrawStringPSO = createComputePSO(drawStringsBlob, mGlobalRootSignature);
+	mPostProcessPSO = createComputePSO(postProcessBlob, mGlobalRootSignature);
+	mClearDrawingPSO = createComputePSO(clearDrawingBlob, mGlobalRootSignature);
+	createRaytracingPSO(&rayTracingBlob);
+	mDenoisingPSO = createComputePSO(denoisingBlob, mGlobalRootSignature);
+#endif
+
+}
+
+CustomBlob Renderer::readShaderBlobFromFile(FileSystem& fileSystem, std::wstring shaderName)
+{
+	FileHandle shaderFile = fileSystem.openFile(shaderName);
+
+	size_t shaderSize;
+	unsigned char* shaderData = fileSystem.readAll(shaderFile, shaderSize);
+
+	CustomBlob result(shaderData, shaderSize);
+	return result;
 }
 
 void Renderer::createFontAtlas(int characterHeight, int extraHorizontalSpacing, FileSystem& fileSystem)
@@ -1315,7 +1348,7 @@ void Renderer::initializeDx12(HWND hwnd, FileSystem& fileSystem)
 
 	// Create shaders and compute passes
 	{
-		createComputePasses();
+		createComputePasses(fileSystem);
 	}
 
 	// Create GPU resources

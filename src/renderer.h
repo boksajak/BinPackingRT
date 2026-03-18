@@ -3,6 +3,33 @@
 #include "fileSystem.h"
 #include "shaders/shared.h"
 
+class CustomBlob : public IDxcBlob {
+public:
+
+	CustomBlob() : data(0), size(0) {}
+	CustomBlob(void* _data, size_t _size) : data(_data), size(_size) {}
+
+	virtual LPVOID STDMETHODCALLTYPE GetBufferPointer(void) {
+		return data;
+	}
+	virtual SIZE_T STDMETHODCALLTYPE GetBufferSize(void) {
+		return size;
+	}
+
+	virtual HRESULT STDMETHODCALLTYPE QueryInterface(
+		/* [in] */ REFIID riid,
+		/* [iid_is][out] */ _COM_Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) {
+		return 0;
+	}
+
+	virtual ULONG STDMETHODCALLTYPE AddRef(void) { return 0; }
+
+	virtual ULONG STDMETHODCALLTYPE Release(void) { return 0; }
+
+	void* data;
+	size_t size;
+};
+
 class Renderer
 {
 public:
@@ -30,8 +57,9 @@ private:
 
 	// Dx12 Helper Functions
 	void initializeDx12(HWND hwnd, FileSystem& fileSystem);
-	void createComputePasses();
+	void createComputePasses(FileSystem& fileSystem);
 	void createBuffers();
+	CustomBlob readShaderBlobFromFile(FileSystem& fileSystem, std::wstring shaderName);
 
 	ID3D12PipelineState* createComputePSO(IDxcBlob& shaderBlob, ID3D12RootSignature* rootSignature);
 	void moveToNextFrame();

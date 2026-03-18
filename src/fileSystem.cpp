@@ -52,7 +52,7 @@ void FileSystem::Cleanup()
 	}
 
 	for (auto file : files) {
-		if (file.data != nullptr) {
+		if (file.data != nullptr && !file.isVirtual) {
 			delete[] file.data;
 			file.data = nullptr;
 		}
@@ -111,6 +111,19 @@ bool FileSystem::readFromFile(FileHandle file, size_t size, void* buffer, size_t
 	}
 }
 
+void FileSystem::LoadAsFile(std::wstring name, size_t size, void* data)
+{
+	OpenedFile file;
+
+	file.name = name;
+	file.size = size;
+	file.data = (unsigned char*) data;
+	file.isVirtual = true;
+
+	files.push_back(file);
+
+}
+
 unsigned char* FileSystem::readAll(FileHandle file) {
 
 	size_t size;
@@ -160,16 +173,23 @@ void FileSystem::dumpTheBigFile(std::wstring fileName) {
 		fwrite(f.name.data(), sizeof(wchar_t), nameSize, file);
 		fwrite(&fileSize, sizeof(uint32_t), 1, file);
 
-		FILE* ff;
-		_wfopen_s(&ff, (basePath + f.name).c_str(), L"rb");
+		if (f.isVirtual)
+		{
+			fwrite(f.data, 1, fileSize, file);
+		}
+		else
+		{
+			FILE* ff;
+			_wfopen_s(&ff, (basePath + f.name).c_str(), L"rb");
 
-		char* temp = new char[fileSize];
+			char* temp = new char[fileSize];
 
-		fread(temp, 1, fileSize, ff);
+			fread(temp, 1, fileSize, ff);
 
-		fclose(ff);
+			fclose(ff);
 
-		fwrite(temp, 1, fileSize, file);
+			fwrite(temp, 1, fileSize, file);
+		}
 	}
 
 	fclose(file);

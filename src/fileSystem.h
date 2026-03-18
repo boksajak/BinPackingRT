@@ -19,6 +19,8 @@ public:
 
 	void dumpTheBigFile(std::wstring fileName);
 
+	void LoadAsFile(std::wstring name, size_t size, void* data);
+
 private:
 
 	struct OpenedFile {
@@ -27,6 +29,7 @@ private:
 		size_t size = 0;
 		size_t offset = 0;
 		unsigned char* data = nullptr;
+		bool isVirtual = false;
 	};
 
 	std::vector<OpenedFile> files;
