@@ -53,6 +53,10 @@ struct GameData
 	uint2 characterSize;
 	uint stringsCount;
 	uint pad2;
+
+	// Tonemapping
+	float3 colorBalance;
+	uint invertColors;
 };
 
 

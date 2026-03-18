@@ -5,6 +5,11 @@ void Game::Initialize(HWND hwnd)
 {
 	// Init settings
 	mEnableSounds = true;
+	mDesiredPhosphor = mSelectedPhosphor;
+	mInvertDisplay = false;
+	mDesiredInvertDisplay = mInvertDisplay;
+
+	mRenderer.SetColorGrading(crtPhosphorColors[int(mSelectedPhosphor)], mInvertDisplay);
 
 #ifdef _DEBUG
 	mFileSystem.initDevelopment();
@@ -24,15 +29,225 @@ void Game::Initialize(HWND hwnd)
 	initializeGame();
 }
 
+void Game::KeyDown(WPARAM wParam) {
+
+	switch (wParam) {
+	case VK_ADD:
+		userInput = UserInput::LEVEL_UP;
+		return;
+	case VK_SUBTRACT:
+		userInput = UserInput::LEVEL_DOWN;
+		return;
+	case VK_ESCAPE:
+		userInput = UserInput::PAUSE;
+		break;
+	case 80: // P
+		mRTOn = !mRTOn;
+		return;
+	case 112: // p
+		mRTOn = !mRTOn;
+		return;
+	}
+
+	if (mGameState != GameState::RUNNING)
+		userInput = UserInput::START_GAME;
+}
+
 void Game::ReloadShaders() 
 {
 	mRenderer.ReloadShaders();
+}
+
+void Game::getUserInput()
+{
+	if (mGameState != GameState::RUNNING) return;
+
+	const float kInputTimeStep = 50;
+	if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - mLastUserInputTime).count() < kInputTimeStep) return;
+
+	if (GetKeyState(VK_LEFT) & 0x8000)
+		userInput = UserInput::LEFT;
+	else if (GetKeyState(VK_RIGHT) & 0x8000)
+		userInput = UserInput::RIGHT;
+	else if ((GetKeyState(VK_SPACE) & 0x8000) || (GetKeyState(VK_DOWN) & 0x8000))
+		userInput = UserInput::DROP;
+	//else if (GetKeyState(VK_ESCAPE) & 0x8000)
+	//	userInput = UserInput::PAUSE;
+	else if (GetKeyState(VK_RETURN) & 0x8000)
+		userInput = UserInput::ROTATE;
+	else if ((GetKeyState(77) & 0x8000) || (GetKeyState(109) & 0x8000))
+		userInput = UserInput::TOGGLE_MUTE;
+	else if ((GetKeyState(VK_CONTROL) & 0x8000) && ((GetKeyState(90) & 0x8000) || (GetKeyState(122) & 0x8000)))
+		userInput = UserInput::UNDO;
+
+	if (userInput != UserInput::NOTHING)
+		mConsecutiveUserInputsCount++;
+	else
+		mConsecutiveUserInputsCount = 0;
+
+	// Disable repeat for certain actions
+	if (mConsecutiveUserInputsCount > 1 && userInput == UserInput::ROTATE)
+		userInput = UserInput::NOTHING;
+
+	if (mConsecutiveUserInputsCount > 1 && userInput == UserInput::UNDO)
+		userInput = UserInput::NOTHING;
+
+	if (mConsecutiveUserInputsCount > 1 && userInput == UserInput::TOGGLE_MUTE)
+		userInput = UserInput::NOTHING;
+
+	// Pause after first key stroke for one game tick to prevent unwanted repetition
+	if (mConsecutiveUserInputsCount == 2 && mLastUserInput == userInput)
+		userInput = UserInput::NOTHING;
+
+	mLastUserInput = userInput;
+	mLastUserInputTime = std::chrono::high_resolution_clock::now();
+
+}
+
+void Game::updateGamePlay(long long elapsedTime)
+{
+	getUserInput();
+
+	switch (mGameState) {
+	case GameState::PAUSE:
+		if (userInput == UserInput::START_GAME) {
+			mGameState = GameState::RUNNING;
+		}
+		return;
+	case GameState::GAME_OVER_WAIT:
+	{
+		const float kWaitTime = 1500;
+		if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - mGameOverTime).count() > kWaitTime) mGameState = GameState::GAME_OVER;
+	}
+	break;
+	case GameState::GAME_OVER:
+		if (userInput == UserInput::START_GAME) {
+			mLevel = 1;
+			mScore = 0;
+			mRemovedLinesOnThisLevel = 0;
+			mUndosLeft = 3;
+			mGameState = GameState::NOT_STARTED;
+			clearPlayingField();
+			mActiveBlock = nullptr;
+		}
+		break;
+	case GameState::NOT_STARTED:
+		if (userInput == UserInput::START_GAME) {
+			clearPlayingField();
+			pickNextBlock();
+			mGameTime = 0;
+			mRemovedLinesOnThisLevel = 0;
+			mScore = 0;
+			mUndosLeft = 3;
+			mWasLevelUp = false;
+			mGameState = GameState::RUNNING;
+			sound(SoundEffect::GAME_START);
+		}
+		else if (userInput == UserInput::LEVEL_UP) {
+			mLevel++;
+			sound(SoundEffect::BLOCK_MOVE);
+		}
+		else if (userInput == UserInput::LEVEL_DOWN) {
+			mLevel--;
+			sound(SoundEffect::BLOCK_MOVE);
+			if (mLevel == 0) mLevel = 1;
+		}
+		break;
+	case GameState::RUNNING:
+		mGameTime += elapsedTime;
+
+		// Set game speed based on difficulty level
+		const long long gameTickLength = long long(1 * 1000000 / (1 + 0.5 * double(mLevel)));
+
+		if (mGameTime >= gameTickLength) {
+
+			if (mActiveBlock != nullptr) {
+				if (canBlockFall()) {
+					moveBlock(glm::vec2(0, 1));
+				}
+				else {
+					copyBlockToField();
+					sound(SoundEffect::BLOCK_PLACED);
+					mActiveBlock = nullptr;
+				}
+			}
+			else 
+			{
+				if (!removeLines()) {
+					if (!placeNewBlock()) {
+						mGameState = GameState::GAME_OVER_WAIT;
+						sound(SoundEffect::GAME_OVER);
+						mGameOverTime = std::chrono::high_resolution_clock::now();
+					}
+					else {
+						if (mWasLevelUp) sound(SoundEffect::LEVEL_UP);
+						mWasLevelUp = false;
+					}
+				}
+				else {
+					sound(SoundEffect::LINES_REMOVED);
+				}
+			}
+
+			mGameTime = 0;
+		}
+
+		if (mActiveBlock) {
+			switch (userInput) {
+			case UserInput::LEFT:
+				if (checkBlockCollision(glm::ivec2(-1, 0), blockRotation)) moveBlock(glm::vec2(-1, 0));
+				break;
+			case UserInput::RIGHT:
+				if (checkBlockCollision(glm::ivec2(1, 0), blockRotation)) moveBlock(glm::vec2(1, 0));
+				break;
+			case UserInput::DROP:
+				if (checkBlockCollision(glm::ivec2(0, 1), blockRotation)) moveBlock(glm::vec2(0, 1));
+				break;
+			case UserInput::ROTATE:
+				BlockRotation newRotation = BlockRotation((int(blockRotation) + 1) % int(BlockRotation::COUNT));
+				if (checkBlockCollision(glm::ivec2(0, 0), newRotation)) {
+					blockRotation = newRotation;
+					sound(SoundEffect::BLOCK_ROTATES);
+				}
+				break;
+			}
+		}
+
+		if (userInput == UserInput::UNDO && mUndosLeft > 0) {
+			if (!lastPlacedBlock.empty()) {
+				for (auto x : lastPlacedBlock) *x = false;
+				lastPlacedBlock.clear();
+				mUndosLeft--;
+			}
+		}
+		else if (userInput == UserInput::PAUSE && mGameTime > 100000) {
+			mGameState = GameState::PAUSE;
+		}
+
+		if (userInput == UserInput::TOGGLE_MUTE) mEnableSounds = !mEnableSounds;
+
+		break;
+	}
+
+	userInput = UserInput::NOTHING;
 }
 
 bool Game::Update(HWND hwnd, const float elapsedTime)
 {
 	// Prepare game GUI
 	{
+
+		// Update the gameplay
+		updateGamePlay(elapsedTime * 1000.0f);
+
+		// Change phospohor type
+		if (mDesiredPhosphor != mSelectedPhosphor || mDesiredInvertDisplay != mInvertDisplay) {
+			mSelectedPhosphor = mDesiredPhosphor;
+			mInvertDisplay = mDesiredInvertDisplay;
+			mRenderer.SetColorGrading(crtPhosphorColors[int(mSelectedPhosphor)], mInvertDisplay);
+		}
+
+		// Draw game
 		mRenderer.ResetStrings();
 
 		// Set margins and layout parameters
@@ -80,7 +295,7 @@ bool Game::Update(HWND hwnd, const float elapsedTime)
 		{
 			std::string controls = "Move:        [\x1B\x1A Keys]\nRotate:        [ENTER]\nDrop:          [SPACE]\nPause:           [ESC]";
 			controls += "\nSound " + std::string(mEnableSounds ? "off:" : "on: ") + "         [M]";
-			controls += "\nPath Tracing " + std::string(mRTOn ? "off:" : "on:") + "   [P]";
+			controls += "\nPath Tracing " + std::string(mRTOn ? "off:" : "on!:") + "  [P]";
 			mRenderer.AddString(controls, left, playingFieldTop + 3 * characterHeightRelative, glm::vec4(1, 1, 1, 1), glm::vec4(0, 0, 0, 0), true);
 		}
 
@@ -299,12 +514,181 @@ char* Game::playingFieldToString(bool*& highlightColorMask, size_t& highlightCol
 
 void Game::initializeGame() {
 	mGameState = GameState::NOT_STARTED;
-	mScore = 0;
 	mActiveBlock = nullptr;
 	mLevel = 1;
-	mRemovedLinesOnThisLevel = 0;
+	mScore = 0;
+	mConsecutiveUserInputsCount = 0;
+	mLastUserInputTime = std::chrono::high_resolution_clock::now();
+	mLastUserInput = UserInput::NOTHING;
 
 	clearPlayingField();
+}
+
+bool Game::removeLines()
+{
+	int removedLines = 0;
+
+	for (int j = 0; j < kFieldHeight; j++) {
+
+		bool isComplete = true;
+		for (int i = 0; i < kFieldWidth; i++) {
+			if (!mField[i][j]) {
+				isComplete = false;
+				break;
+			}
+		}
+
+		if (isComplete) {
+			removedLines++;
+			lastPlacedBlock.clear();
+			for (int k = j; k > 0; k--) {
+				for (int l = 0; l < kFieldWidth; l++) {
+					mField[l][k] = mField[l][k - 1];
+				}
+			}
+			for (int l = 0; l < kFieldWidth; l++) {
+				mField[l][0] = 0;
+			}
+		}
+	}
+
+	mScore += (removedLines * 100) * unsigned int(std::ceil(float(removedLines) / 2.0f)) * mLevel;
+
+	mRemovedLinesOnThisLevel += removedLines;
+
+	if (mRemovedLinesOnThisLevel >= kRemovedLinesToLevelUp) {
+		// Level Up!
+		mLevel++;
+		mRemovedLinesOnThisLevel = 0;
+		mWasLevelUp = true;
+		pickNextColorScheme();
+	}
+
+	return removedLines > 0;
+}
+
+void Game::pickNextColorScheme()
+{
+
+	if (mDesiredInvertDisplay || mSelectedPhosphor == CrtPhosphorTypes::Green) {
+		mDesiredPhosphor = CrtPhosphorTypes((int(mSelectedPhosphor) + 1) % int(CrtPhosphorTypes::Count));
+		mDesiredInvertDisplay = false;
+	}
+	else {
+		mDesiredInvertDisplay = true;
+	}
+
+	// Don't invert green display, it looks crazy
+	if (mDesiredPhosphor == CrtPhosphorTypes::Green) mDesiredInvertDisplay = false;
+}
+
+glm::ivec2 Game::calculateBlockSize(Block block)
+{
+	glm::ivec2 blockSize = glm::ivec2(0, 0);
+
+	for (int j = 0; j < 4; j++) {
+		for (int i = 0; i < 4; i++) {
+			glm::ivec2 blockOffset = glm::ivec2(i, j);
+			if (block.shapeData[blockOffset.y][blockOffset.x]) {
+				blockSize = glm::max(blockSize, blockOffset);
+			}
+		}
+	}
+
+	return blockSize;
+}
+
+void Game::moveBlock(glm::ivec2 offset)
+{
+	blockPosition += offset;
+}
+
+bool Game::placeNewBlock()
+{
+	mActiveBlock = mNextBlock.shapeData;
+	blockRotation = nextBlockRotation;
+
+	blockSize = nextBlockSize;
+	blockPosition = glm::ivec2(kFieldWidth / 2 - blockSize.x / 2, 0);
+
+	pickNextBlock();
+
+	return checkBlockCollision(glm::ivec2(0, 0), blockRotation);
+}
+
+void Game::copyBlockToField()
+{
+	lastPlacedBlock.clear();
+
+	for (int i = 0; i < 4; i++) {
+		for (int j = 0; j < 4; j++) {
+
+			glm::ivec2 blockOffset = getBlockOffset(i, j, blockSize, blockRotation);
+			if (blockOffset.x < 0 || blockOffset.y < 0) continue;
+
+			glm::ivec2 destinationPos = blockPosition + glm::ivec2(i, j);
+			if (!isInsideField(destinationPos)) continue;
+
+			unsigned char* destination = &mField[destinationPos.x][destinationPos.y];
+			const bool* source = &mActiveBlock[blockOffset.y][blockOffset.x];
+
+			if (*source) {
+				lastPlacedBlock.push_back(destination);
+				*destination = mActiveBlockMaterialIndex;
+			}
+		}
+	}
+}
+
+void Game::pickNextBlock()
+{
+	std::random_device r;
+	std::default_random_engine e1(r());
+	std::default_random_engine e2(r());
+	std::default_random_engine e3(r());
+	std::uniform_int_distribution<int> uniform_distBlockType(0, _countof(blocks) - 1);
+	std::uniform_int_distribution<int> uniform_distRotation(0, int(BlockRotation::COUNT) - 1);
+	std::uniform_int_distribution<int> uniform_distMaterial(1, mRenderer.getAllMaterialsCount());
+
+	mNextBlock = blocks[uniform_distBlockType(e1)];
+	nextBlockRotation = BlockRotation(uniform_distRotation(e2));
+	nextBlockSize = calculateBlockSize(mNextBlock);
+	mActiveBlockMaterialIndex = uniform_distMaterial(e3);
+}
+
+bool Game::isInsideField(glm::ivec2 pos) {
+	if (pos.y >= kFieldHeight) return false;
+	if (pos.x >= kFieldWidth) return false;
+	if (pos.y < 0) return false;
+	if (pos.x < 0) return false;
+	return true;
+}
+
+bool Game::checkBlockCollision(glm::ivec2 additionalOffset, BlockRotation rotation) {
+
+	for (int i = 0; i < 4; i++) {
+		for (int j = 0; j < 4; j++) {
+
+			glm::ivec2 blockOffset = getBlockOffset(i, j, blockSize, rotation);
+			if (blockOffset.x < 0 || blockOffset.y < 0) continue;
+
+			const bool* source = &mActiveBlock[blockOffset.y][blockOffset.x];
+
+			if (*source) {
+				glm::ivec2 fieldOffset = blockPosition + glm::ivec2(i, j) + additionalOffset;
+				if (!isInsideField(fieldOffset)) return false;
+
+				unsigned char* destination = &mField[fieldOffset.x][fieldOffset.y];
+				if (*destination) return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+bool Game::canBlockFall() {
+	return checkBlockCollision(glm::ivec2(0, 1), blockRotation);
 }
 
 void Game::clearPlayingField() {

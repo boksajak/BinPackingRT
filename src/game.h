@@ -9,7 +9,8 @@ public:
 
 	void Initialize(HWND hwnd);
 	void Cleanup();
-	
+	void KeyDown(WPARAM wParam);
+
 	void ReloadShaders();
 	bool Update(HWND hwnd, const float elapsedTime);
 	
@@ -148,6 +149,37 @@ private:
 		PAUSE
 	} mGameState;
 
+	unsigned int mScore;
+	unsigned int mLevel;
+	unsigned int mRemovedLinesOnThisLevel;
+	unsigned int mUndosLeft = 0;
+	std::chrono::high_resolution_clock::time_point mGameOverTime;
+	long long mGameTime;
+	bool mWasLevelUp;
+	std::vector<unsigned char*> lastPlacedBlock;
+
+	// Gameplay
+	void initializeGame();
+	void updateGamePlay(long long elapsedTime);
+	void clearPlayingField();
+	void pickNextBlock();
+	bool isInsideField(glm::ivec2 pos);
+	bool canBlockFall();
+	bool checkBlockCollision(glm::ivec2 additionalOffset, BlockRotation rotation);
+	char* playingFieldToString(bool*& highlightColorMask, size_t& highlightColorMaskLength, unsigned int rtFieldCharactersWidth);
+	glm::ivec2 getBlockOffset(int i, int j, glm::ivec2 size, BlockRotation rotation);
+	char* nextBlockToString();
+	bool getOverlayText(char* bufferA, size_t bufferLengthA, char* bufferB, size_t bufferLengthB);
+	glm::ivec2 calculateBlockSize(Block block);
+	void moveBlock(glm::ivec2 offset);
+	void copyBlockToField();
+	bool removeLines();
+	void pickNextColorScheme();
+	bool placeNewBlock();
+
+	static const unsigned int kRemovedLinesToLevelUp = 10;
+
+	// Input system
 	enum class UserInput {
 		NOTHING,
 		START_GAME,
@@ -162,18 +194,23 @@ private:
 		TOGGLE_MUTE,
 	} userInput;
 
-	unsigned int mScore;
-	unsigned int mLevel;
-	unsigned int mRemovedLinesOnThisLevel;
-	unsigned int mUndosLeft = 0;
+	std::chrono::high_resolution_clock::time_point mLastUserInputTime;
+	unsigned int mConsecutiveUserInputsCount;
+	UserInput mLastUserInput;
+	void getUserInput();
 
-	// Gameplay
-	void initializeGame();
-	void clearPlayingField();
-	char* playingFieldToString(bool*& highlightColorMask, size_t& highlightColorMaskLength, unsigned int rtFieldCharactersWidth);
-	glm::ivec2 getBlockOffset(int i, int j, glm::ivec2 size, BlockRotation rotation);
-	char* nextBlockToString();
-	bool getOverlayText(char* bufferA, size_t bufferLengthA, char* bufferB, size_t bufferLengthB);
+	// Display settings
+	enum class CrtPhosphorTypes {
+		Amber,
+		Green,
+		White,
+		Count
+	};
+	CrtPhosphorTypes mSelectedPhosphor = CrtPhosphorTypes::Amber;
+	CrtPhosphorTypes mDesiredPhosphor;
+	glm::vec3 crtPhosphorColors[int(CrtPhosphorTypes::Count)] = { glm::vec3(1, 0.75, 0), glm::vec3(0.33, 1.0, 0.0), glm::vec3(0.9, 0.9, 0.9) };
+	bool mInvertDisplay;
+	bool mDesiredInvertDisplay;
 
 	// Rendering chars
 	// Special chars (in CP437)

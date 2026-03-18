@@ -299,6 +299,16 @@ void Renderer::GetCharacterSize(int& characterWidth, int& characterHeight)
 	 characterHeight = mGameData.characterSize.y;
 }
 
+void Renderer::SetColorGrading(glm::vec3 crtColor, bool invertDisplay)
+{
+	mGameData.colorBalance = crtColor;
+	mGameData.invertColors = invertDisplay ? 1 : 0;
+}
+
+int Renderer::getAllMaterialsCount() {
+	return 50;
+}
+
 ID3D12PipelineState* Renderer::createComputePSO(IDxcBlob& shaderBlob, ID3D12RootSignature* rootSignature)
 {
 	D3D12_COMPUTE_PIPELINE_STATE_DESC pipelineDesc = {};

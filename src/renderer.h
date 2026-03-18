@@ -19,6 +19,10 @@ public:
 	void AddString(const std::string& s, float posX, float posY, glm::vec4 fontColor = glm::vec4(1, 1, 1, 1), glm::vec4 bgColor = glm::vec4(0, 0, 0, 0), bool stringIsCP437 = false, glm::vec4 highlightColor = glm::vec4(0, 0, 0, 0), bool* highlightColorMask = nullptr, size_t highlightColorMaskLength = 0);
 	unsigned int GetCenteredTextX(const char* buffer, size_t bufferLength, unsigned int characterWidth, unsigned int frameWidth);
 	void GetCharacterSize(int& characterWidth, int& characterHeight);
+	void SetColorGrading(glm::vec3 crtColor, bool invertDisplay);
+
+	// path traced Drawing
+	int getAllMaterialsCount();
 
 private:
 

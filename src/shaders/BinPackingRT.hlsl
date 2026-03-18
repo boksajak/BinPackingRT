@@ -48,14 +48,14 @@ void DrawString(
     const int stringIndex = groupID.z;
     if (stringIndex > gData.stringsCount) return;
     
-    const StringData stringData = gData.strings[stringIndex];
+    const StringData stringData = gData.strings[NonUniformResourceIndex(stringIndex)];
     if (LaunchIndex.y >= gData.characterSize.y) return;
     
     const uint characterIdx = LaunchIndex.x / gData.characterSize.x;
     if (characterIdx >= stringData.stringLength) return;
 
 	// Decode character from buffer
-    const uint packedCharacterAtlasPos = stringsBuffer[stringData.stringStartOffset + characterIdx];
+    const uint packedCharacterAtlasPos = stringsBuffer[NonUniformResourceIndex(stringData.stringStartOffset + characterIdx)];
     const uint2 characterAtlasPos = uint2(packedCharacterAtlasPos & 0xFF, (packedCharacterAtlasPos >> 8) & 0x7F);
 
 	// Figure out this texel
@@ -66,14 +66,14 @@ void DrawString(
     const float4 color = (packedCharacterAtlasPos >> 15) ? stringData.highlightColor : stringData.fontColor;
 
 	// Read from font atlas and apply string color
-    float4 result = float4(fontAtlasTexture[characterTexel].rrrr) * color;
+    float4 result = float4(fontAtlasTexture[NonUniformResourceIndex(characterTexel)].rrrr) * color;
 
 	// Apply backround assuming premultiplied alpha
     result = stringData.backgroundColor * (1 - result.a) + result;
 
 	// Blend into back buffer (assume premultiplied alpha again)
-    const float4 currentPixel = DrawingBuffer[LaunchIndex.xy + stringData.screenPosition];
-    DrawingBuffer[LaunchIndex.xy + stringData.screenPosition] = currentPixel * (1 - result.a) + result;
+    const float4 currentPixel = DrawingBuffer[NonUniformResourceIndex(LaunchIndex.xy + stringData.screenPosition)];
+    DrawingBuffer[NonUniformResourceIndex(LaunchIndex.xy + stringData.screenPosition)] = currentPixel * (1 - result.a) + result;
 }
 
 // =========================================================================
@@ -108,11 +108,11 @@ float3 setSaturation(float3 color, float saturation)
 
 float3 colorGrading(float3 color)
 {
-    bool invertColors = false;
+    const bool invertColors = gData.invertColors;
     const float exposureAdjustment = 1.5f;
     const float tonemappingContrast = 0.85f;
     const float tonemappingSaturation = 1.0f;
-    const float3 colorBalance = float3(1, 1, 1);
+    const float3 colorBalance = gData.colorBalance;
     const float tonemappingGamma = 0.8f;
     
     if (invertColors)
