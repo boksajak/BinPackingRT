@@ -157,6 +157,7 @@ private:
 	long long mGameTime;
 	bool mWasLevelUp;
 	std::vector<unsigned char*> lastPlacedBlock;
+	std::vector<glm::ivec2> mBlockDifferences;
 
 	// Gameplay
 	void initializeGame();
@@ -176,6 +177,7 @@ private:
 	bool removeLines();
 	void pickNextColorScheme();
 	bool placeNewBlock();
+	void updateBlockDifferencesList();
 
 	static const unsigned int kRemovedLinesToLevelUp = 10;
 

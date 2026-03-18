@@ -88,3 +88,15 @@ WCHAR utils::mapCharToCP437(char c) {
 	MultiByteToWideChar(437, 0, &c, 1, &result, 1);
 	return result;
 }
+
+uint32_t utils::nextPowerOfTwo(uint32_t v) {
+	v--;
+	v |= v >> 1;
+	v |= v >> 2;
+	v |= v >> 4;
+	v |= v >> 8;
+	v |= v >> 16;
+	v++;
+
+	return v;
+}

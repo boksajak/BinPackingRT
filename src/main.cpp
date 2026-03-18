@@ -51,7 +51,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 	return 0;
 }
 
-HRESULT Create(LONG width, LONG height, HINSTANCE& instance, HWND& window, LPCWSTR title, Game* game) {
+HRESULT Create(LONG width, LONG height, HINSTANCE& instance, HWND& window, LPCWSTR title, Game* game)
+{
+	DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
 
 	// Register the window class
 	WNDCLASSEX wcex = { 0 };
@@ -82,9 +84,9 @@ HRESULT Create(LONG width, LONG height, HINSTANCE& instance, HWND& window, LPCWS
 
 	// Create the window
 	RECT rc = { 0, 0, width, height };
-	AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
+	AdjustWindowRect(&rc, style, FALSE);
 
-	window = CreateWindow(wcex.lpszClassName, title, WS_OVERLAPPEDWINDOW, x, y, (rc.right - rc.left), (rc.bottom - rc.top), NULL, NULL, instance, game);
+	window = CreateWindow(wcex.lpszClassName, title, style, x, y, (rc.right - rc.left), (rc.bottom - rc.top), NULL, NULL, instance, game);
 	if (!window) return E_FAIL;
 
 	// Show the window

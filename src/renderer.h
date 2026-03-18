@@ -7,11 +7,11 @@ class Renderer
 {
 public:
 
-	void Initialize(HWND hwnd, FileSystem& fileSystem);
+	void Initialize(HWND hwnd, FileSystem& fileSystem, unsigned int fieldWidth, unsigned int fieldHeight);
 	void Cleanup();
 
 	void ReloadShaders();
-	bool Update(HWND hwnd, const float elapsedTime);
+	bool Update(HWND hwnd, const float elapsedTime, unsigned int playingFieldHeight, unsigned int rtFieldPosX, unsigned int rtFieldPosY, std::vector<glm::ivec2>& blockDifferences, bool rtOn);
 
 	// Strings drawing
 	void ResetStrings();
@@ -22,12 +22,14 @@ public:
 	void SetColorGrading(glm::vec3 crtColor, bool invertDisplay);
 
 	// path traced Drawing
-	int getAllMaterialsCount();
+	int GetAllMaterialsCount();
+	void ClearAllCubes();
+	void AddCube(size_t materialIndex, glm::uvec2 position);
 
 private:
 
 	// Dx12 Helper Functions
-	void initializeDx12(HWND hwnd);
+	void initializeDx12(HWND hwnd, FileSystem& fileSystem);
 	void createComputePasses();
 	void createBuffers();
 
@@ -124,4 +126,130 @@ private:
 	const size_t kMaxStringDataLength = 20 * 1024;
 	size_t mStringDataCurrentOffset = 0;
 
+	// Materials buffer
+	const size_t kMaxMaterials = 1024;
+	ID3D12Resource* mMaterialsBuffer;
+	ID3D12Resource* mMaterialsUploadHeap;
+	Material* mMaterialData = nullptr;
+	size_t mMaterialDataCurrentOffset;
+	std::vector<Material> mMaterials;
+
+	glm::vec3 kBlockColors[5] = { glm::vec3(0.9, 0.27, 0.46), glm::vec3(0.67, 1, 0.47), glm::vec3(1, 0.5, 1), glm::vec3(1, 1, 0.52), glm::vec3(0.33, 1, 1) };
+
+	// Meshes
+	struct AccelerationStructureBuffer
+	{
+		ID3D12Resource* pScratch = nullptr;
+		ID3D12Resource* pResult = nullptr;
+		ID3D12Resource* pInstanceDesc = nullptr;
+	};
+
+	struct D3D12ModelData {
+		ID3D12Resource* vertexBuffer;
+		ID3D12Resource* indexBuffer;
+		D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
+		D3D12_INDEX_BUFFER_VIEW indexBufferView;
+		AccelerationStructureBuffer asBuffer;
+	};
+
+	struct ModelData {
+		glm::vec4* vertices;
+		unsigned int* indices;
+
+		size_t verticesCount;
+		size_t indicesCount;
+	};
+
+	struct ModelInstance {
+
+		UINT rtMask = 0xFF;
+		UINT instanceId = 0;
+		glm::mat3x4 transform;
+		Material material;
+
+		D3D12ModelData* d3d12Data = nullptr;
+		ModelData* data = nullptr;
+	};
+
+	// Geometry info
+	static const size_t			kVertexSize = sizeof(glm::vec4);
+	static const size_t			kIndexSize = sizeof(unsigned int);
+	static const DXGI_FORMAT	kIndexFormat = DXGI_FORMAT_R32_UINT;
+
+	D3D12ModelData				mCubeModelD3DData;
+	ModelData					mCubeModelData;
+
+	ModelInstance				mArenaInstance;
+	std::vector<ModelInstance>	mInstances;
+
+	AccelerationStructureBuffer	mTLAS;
+	uint64_t					mTlasSize;
+	D3D12_GPU_VIRTUAL_ADDRESS	mTlasGPUAddress;
+	D3D12_CPU_DESCRIPTOR_HANDLE	mTLASSrvHandle;
+
+	// Path tracing stuff
+	unsigned int				mRtFieldPixelsWidth;
+	unsigned int				mRtFieldPixelsHeight;
+	unsigned int				mRtFieldCharactersWidth;
+
+	ID3D12Resource* mTLASInstanceDescriptorsCache;
+	ID3D12Resource* mTLASScratchBuffersCache;
+	ID3D12Resource* mTLASResultsCache;
+
+	ID3D12Resource* mNormalsBuffer;
+	ID3D12Resource* mNormalsBufferUploadHeap;
+	UINT			mNormalsBufferLength;
+
+	ID3D12Resource* mShaderTable;
+	uint32_t mShaderTableRecordSize;
+
+	ID3D12StateObject* mRTPSO = nullptr;
+	ID3D12StateObjectProperties* mRTPSOInfo = nullptr;
+	ID3D12PipelineState* mDenoisingPSO = nullptr;
+
+	unsigned int	mFrameNumber;
+	unsigned int	mAccumulatedFrames;
+	unsigned int	mDenoiserIterationsCount = 1;
+	unsigned int	mFieldWidth;
+	unsigned int	mFieldHeight;
+	float			mHorizontalStretch = 0.83f;
+
+	AccelerationStructureBuffer createBottomLevelAS(ID3D12Resource* vertexBuffer, UINT verticesCount, UINT64 VertexBufferStrideInBytes, ID3D12Resource* indexBuffer, UINT indicesCount, DXGI_FORMAT indexBufferFormat);
+	void createBottomLevelAS(ModelData* data, D3D12ModelData* d3d12Data);
+	void createBottomLevelAS(ModelInstance& model);
+
+	void createVertexBuffer(ID3D12Device* device, UINT64 verticesCount, UINT64 vertexSize, void* vertexData, D3D12_VERTEX_BUFFER_VIEW& vertexBufferView, ID3D12Resource*& vertexBuffer, std::wstring debugName = L"Vertex Buffer");
+	void createIndexBuffer(ID3D12Device* device, UINT64 indicesCount, UINT64 indexSize, DXGI_FORMAT indexFormat, void* indexData, D3D12_INDEX_BUFFER_VIEW& indexBufferView, ID3D12Resource*& indexBuffer, std::wstring debugName = L"Index Buffer");
+	void createNormalsBuffer(const std::vector<glm::vec3>& normals);
+	std::vector<glm::vec3> createNormals(ModelData modelData);
+
+	void createModelBuffers(ModelData* data, D3D12ModelData* d3d12Data, std::wstring debugName = L"3D Model");
+	void createModelBuffers(ModelInstance& model, std::wstring debugName = L"3D Model");
+
+	void createShaderTable();
+	void createRtResources(FileSystem& fileSystem);
+	void createMaterialsBuffer();
+	void updateMaterialsBuffer(Material* materialData, size_t materialsCount);
+	void createAllMaterials();
+	void calculateRTWindowSize();
+	void createDisocclusionBuffer();
+	void createRaytracingPSO(IDxcBlob* programBlob);
+
+	// RT Window Buffers
+	enum class RtWindowBuffers {
+		RAW_OUTPUT,
+		NORMAL_MATERIAL_DEPTH,
+		TEMP1,
+		TEMP2,
+		HISTORY_LENGTH,
+		DISOCCLUSIONS,
+		COUNT
+	};
+
+	static const int				kRtWindowBuffersCount = int(RtWindowBuffers::COUNT);
+	ID3D12Resource* mRtWindowBuffers[kRtWindowBuffersCount];
+	D3D12_CPU_DESCRIPTOR_HANDLE		mRtWindowsUavHandle;
+
+	ID3D12Resource* mDisocclusionBufferUploadHeap;
+	glm::vec4* mDisocclusionBufferData = nullptr;
 };

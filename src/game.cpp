@@ -17,7 +17,7 @@ void Game::Initialize(HWND hwnd)
 	mFileSystem.initUseBigFile(L"stuff.bin");
 #endif
 
-	mRenderer.Initialize(hwnd, mFileSystem);
+	mRenderer.Initialize(hwnd, mFileSystem, kFieldWidth, kFieldHeight);
 	mAudio.Initialize(hwnd);
 
 	// Load sounds
@@ -234,9 +234,31 @@ void Game::updateGamePlay(long long elapsedTime)
 
 bool Game::Update(HWND hwnd, const float elapsedTime)
 {
+	// Set margins and layout parameters
+	float top = 0.05f;
+	float left = 0.05f;
+	float right = 0.05f;
+	float bottom = 0.05f;
+
+	int characterWidth;
+	int characterHeight;
+	mRenderer.GetCharacterSize(characterWidth, characterHeight);
+	const float characterWidthRelative = float(characterWidth) / frameWidth;
+	const float characterHeightRelative = float(characterHeight) / frameHeight;
+
+	const int gameStatsCharactersOffset = 2;
+	unsigned int playingFieldWidth = mRTOn ? mRtFieldCharactersWidth + 2 : kFieldWidth + 2;
+	const int mainAreaWidthCharacters = (playingFieldWidth + 2) + gameStatsCharactersOffset + (kRemovedLinesToLevelUp + 2);
+	const float playingFieldLeft = (1.0f - (mainAreaWidthCharacters * characterWidthRelative)) * 0.5f;
+	const float playingFieldTop = top + 4 * characterHeightRelative;
+	const float playingFieldBottom = playingFieldTop + (kFieldHeight + 2) * characterHeightRelative;
+	const float playingFieldRight = playingFieldLeft + (playingFieldWidth + 2) * characterWidthRelative;
+
+	unsigned int rtFieldPosX = (unsigned int)glm::floor(playingFieldLeft * float(frameWidth) + characterWidth);
+	unsigned int rtFieldPosY = (unsigned int)glm::floor(playingFieldTop * float(frameHeight) + characterHeight);
+
 	// Prepare game GUI
 	{
-
 		// Update the gameplay
 		updateGamePlay(elapsedTime * 1000.0f);
 
@@ -250,41 +272,21 @@ bool Game::Update(HWND hwnd, const float elapsedTime)
 		// Draw game
 		mRenderer.ResetStrings();
 
-		// Set margins and layout parameters
-		float top = 0.05f;
-		float left = 0.05f;
-		float right = 0.05f;
-		float bottom = 0.05f;
-
-		int characterWidth;
-		int characterHeight;
-		mRenderer.GetCharacterSize(characterWidth, characterHeight);
-		const float characterWidthRelative = float(characterWidth) / frameWidth;
-		const float characterHeightRelative = float(characterHeight) / frameHeight;
-
 		// Figure out more layout params
-		const float playingFieldTop = top + 4 * characterHeightRelative;
-
 		const float horizontalStretch = 0.83f;
 		int pixelsWidth = (int)(characterHeight * kFieldWidth * horizontalStretch);
 		mRtFieldCharactersWidth = pixelsWidth / characterWidth + 1;
 		mRtFieldPixelsWidth = mRtFieldCharactersWidth * characterWidth;
 		mRtFieldPixelsHeight = kFieldHeight * characterHeight;
 
-		const int gameStatsCharactersOffset = 2;
 		const unsigned int kRemovedLinesToLevelUp = 10;
-		unsigned int playingFieldWidth = mRTOn ? mRtFieldCharactersWidth + 2 : kFieldWidth + 2;
-		const int mainAreaWidthCharacters = (playingFieldWidth + 2) + gameStatsCharactersOffset + (kRemovedLinesToLevelUp + 2);
-		const float playingFieldLeft = (1.0f - (mainAreaWidthCharacters * characterWidthRelative)) * 0.5f;
-		const float playingFieldBottom = playingFieldTop + (kFieldHeight + 2) * characterHeightRelative;
-		const float playingFieldRight = playingFieldLeft + (playingFieldWidth + 2) * characterWidthRelative;
 		const float gameStatsLeft = playingFieldRight + gameStatsCharactersOffset * characterWidthRelative;
 		const float overlayTop = playingFieldBottom + 1 * characterHeightRelative;
 
 		// Draw header
 		float headerPosY = top;
 		std::string header = "============================= Bin Packing Path Traced =============================";
-		mRenderer.AddString(header, mRenderer.GetCenteredTextX(header.c_str(), header.length(), characterWidth, frameWidth), unsigned int(headerPosY * frameHeight));
+		mRenderer.AddString(header, mRenderer.GetCenteredTextX(header.c_str(), header.length(), characterWidth, frameWidth), unsigned int(headerPosY* frameHeight));
 
 		// Draw footer
 		std::string footer = "Refracted Ray \1 " + std::string(mRTOn ? "2026" : "1989");
@@ -351,7 +353,35 @@ bool Game::Update(HWND hwnd, const float elapsedTime)
 
 	}
 
-	mRenderer.Update(hwnd, elapsedTime);
+	// Prepare RT rendering
+	{
+		mRenderer.ClearAllCubes();
+
+		for (int j = 0; j < kFieldHeight; j++) {
+			for (int i = 0; i < kFieldWidth; i++) {
+				unsigned char blockMaterialIndex = mField[i][j];
+				bool isFieldOccupied = (blockMaterialIndex > 0);
+
+				if (!isFieldOccupied && mActiveBlock) {
+					glm::ivec2 blockOffset = getBlockOffset(i - blockPosition.x, j - blockPosition.y, blockSize, blockRotation);
+
+					if (blockOffset.x >= 0 && blockOffset.y >= 0 && blockOffset.x <= blockSize.x && blockOffset.y <= blockSize.y) {
+						isFieldOccupied = mActiveBlock[blockOffset.y][blockOffset.x];
+					}
+
+					blockMaterialIndex = mActiveBlockMaterialIndex;
+				}
+
+				if (isFieldOccupied) {
+					mRenderer.AddCube(blockMaterialIndex - 1, glm::uvec2(i, j));
+				}
+			}
+		}
+
+		updateBlockDifferencesList();
+	}
+
+	mRenderer.Update(hwnd, elapsedTime, kFieldHeight, rtFieldPosX, rtFieldPosY, mBlockDifferences, mRTOn);
 
 	return true;
 }
@@ -648,7 +678,7 @@ void Game::pickNextBlock()
 	std::default_random_engine e3(r());
 	std::uniform_int_distribution<int> uniform_distBlockType(0, _countof(blocks) - 1);
 	std::uniform_int_distribution<int> uniform_distRotation(0, int(BlockRotation::COUNT) - 1);
-	std::uniform_int_distribution<int> uniform_distMaterial(1, mRenderer.getAllMaterialsCount());
+	std::uniform_int_distribution<int> uniform_distMaterial(1, mRenderer.GetAllMaterialsCount());
 
 	mNextBlock = blocks[uniform_distBlockType(e1)];
 	nextBlockRotation = BlockRotation(uniform_distRotation(e2));
@@ -728,5 +758,53 @@ bool Game::getOverlayText(char* bufferA, size_t bufferLengthA, char* bufferB, si
 		bufferA[0] = 0;
 		bufferB[0] = 0;
 		return false;
+	}
+}
+
+void Game::updateBlockDifferencesList()
+{
+	mBlockDifferences.clear();
+
+	for (int i = 0; i < kFieldWidth; i++) {
+		for (int j = 0; j < kFieldHeight; j++) {
+
+			unsigned char blockMaterialIndex = mField[i][j];
+			bool isFieldOccupied = (blockMaterialIndex > 0);
+
+			if (!isFieldOccupied && mActiveBlock) {
+				glm::ivec2 blockOffset = getBlockOffset(i - blockPosition.x, j - blockPosition.y, blockSize, blockRotation);
+
+				if (blockOffset.x >= 0 && blockOffset.y >= 0 && blockOffset.x <= blockSize.x && blockOffset.y <= blockSize.y) {
+					isFieldOccupied = mActiveBlock[blockOffset.y][blockOffset.x];
+				}
+
+				if (isFieldOccupied) blockMaterialIndex = mActiveBlockMaterialIndex;
+			}
+
+			if (mPreviousField[i][j] != blockMaterialIndex) {
+				mBlockDifferences.push_back(glm::ivec2(i, j));
+			}
+		}
+	}
+
+	// Remember current playing field
+	for (int i = 0; i < kFieldWidth; i++) {
+		for (int j = 0; j < kFieldHeight; j++) {
+
+			unsigned char blockMaterialIndex = mField[i][j];
+			bool isFieldOccupied = (blockMaterialIndex > 0);
+
+			if (!isFieldOccupied && mActiveBlock) {
+				glm::ivec2 blockOffset = getBlockOffset(i - blockPosition.x, j - blockPosition.y, blockSize, blockRotation);
+
+				if (blockOffset.x >= 0 && blockOffset.y >= 0 && blockOffset.x <= blockSize.x && blockOffset.y <= blockSize.y) {
+					isFieldOccupied = mActiveBlock[blockOffset.y][blockOffset.x];
+				}
+
+				if (isFieldOccupied) blockMaterialIndex = mActiveBlockMaterialIndex;
+			}
+
+			mPreviousField[i][j] = blockMaterialIndex;
+		}
 	}
 }

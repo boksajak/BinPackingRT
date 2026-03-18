@@ -59,7 +59,16 @@ struct GameData
 	uint invertColors;
 };
 
+struct Material {
+	float3 albedo;
+	float metalness;
+	float3 emissive;
+	float roughness;
+	unsigned int id;
+	float3 pad;
+};
 
 #define DRAW_STRING_THREADGROUP_SIZE 16
 #define CLEAR_UAV_THREADGROUP_SIZE 16
 #define POST_PROCESS_THREADGROUP_SIZE 16
+#define DENOISER_THREADGROUP_SIZE 16

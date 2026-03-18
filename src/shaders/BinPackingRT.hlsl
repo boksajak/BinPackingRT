@@ -32,6 +32,11 @@ RWTexture2D<float4> OutputBuffer : register(u1);
 Texture2D<float4> fontAtlasTexture : register(t0);
 Buffer<uint> stringsBuffer : register(t1);
 
+// RT rendering
+StructuredBuffer<Material> materialsBuffer : register(t2);
+RaytracingAccelerationStructure SceneBVH : register(t3);
+Buffer<float3> normalsBuffer : register(t4);
+RWTexture2D<float4> rtWindowBuffersRW[RT_WINDOW_BUFFERS_COUNT] : register(u0, space1);
 
 // =========================================================================
 //   String Drawing
@@ -185,4 +190,68 @@ void ClearUAV(
 
     const float4 clearColor = float4(0, 0, 0, 0);
     DrawingBuffer[LaunchIndex] = clearColor;
+}
+
+// =========================================================================
+//   Denoiser
+// =========================================================================
+
+[shader("compute")]
+[numthreads(DENOISER_THREADGROUP_SIZE, DENOISER_THREADGROUP_SIZE, 1)]
+void Denoise(
+    int2 groupID : SV_GroupID,
+    int2 groupThreadID : SV_GroupThreadID,
+    int2 LaunchIndex : SV_DispatchThreadID)
+{
+
+}
+
+// =========================================================================
+//   Path tracer
+// =========================================================================
+
+struct HitInfo
+{
+    float3 throughput;
+    uint bounce;
+    float3 result;
+    float hitT;
+    uint2 pixelIndex;
+    uint offset;
+
+    bool hasHit()
+    {
+        return hitT > 0.0f;
+    }
+};
+
+struct Attributes
+{
+    float2 uv;
+};
+
+[shader("closesthit")]
+void ClosestHit(inout HitInfo payload, Attributes attrib)
+{
+
+}
+
+[shader("miss")]
+void Miss(inout HitInfo payload)
+{
+
+}
+
+
+[shader("raygeneration")]
+void RayGen()
+{
+    uint2 LaunchIndex = DispatchRaysIndex().xy;
+    uint2 resolution = uint2(gRootConstants.ax, gRootConstants.bx);
+    if (LaunchIndex.x >= resolution.x || LaunchIndex.y >= resolution.y)
+        return;
+
+    
+    DrawingBuffer[NonUniformResourceIndex(LaunchIndex)] = float4(1, 0, 1, 0);
+
 }

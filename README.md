@@ -2,7 +2,7 @@
 
 A comprehensive study of block placement strategies under time pressure, with path tracing.
 
-![Bin Packing Game](main.png "Bin Packing Game") The path are traced, the bins are being packed. Wild stuff.
+![Bin Packing Game](main.png "Bin Packing Game") The paths are traced, the bins are being packed. Wild stuff.
 
 ## Binaries
 
@@ -13,6 +13,12 @@ For the first build, **run the Visual Studio as an Administrator**. Build proces
 
 * Run `cmake` on the *src* subfolder and build the generated project
 * Or run provided file `create_vs_project.bat` and build the project generated in the *vsbuild* subfolder (requires Visual Studio 2022)
+
+## Release & Development
+
+When the game is built and run in the debug mode, it loads all assets (sounds & shaders & font) from original sources. When application exits normally, it creates the stuff.bin file packed with those resources.
+
+When it's run in the release mode, it loads all resources from the stuff.bin file. To make a release, first run it in debug, copy created file to final directory, build the app in release, and copy the .exe in that directory as well. 
 
 ### Troubleshooting
 If you get an error *Error: failed to get shader blob result!*, it most likely means that build didn't create a symbolic link for shaders folder in the build directory and executable can't find shader files. To fix this, run Visual Studio as administrator, clean the solution and run the build again.

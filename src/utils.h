@@ -18,4 +18,6 @@ namespace utils {
 	bool directoryExists(const std::string& path);
 
 	WCHAR mapCharToCP437(char c);
+
+	uint32_t nextPowerOfTwo(uint32_t v);
 }
