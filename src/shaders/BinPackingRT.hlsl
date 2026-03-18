@@ -251,14 +251,137 @@ void ClearUAV(
 //   Denoiser
 // =========================================================================
 
+float2 octWrap(float2 v)
+{
+    return float2((1.0f - abs(v.y)) * (v.x >= 0.0f ? 1.0f : -1.0f), (1.0f - abs(v.x)) * (v.y >= 0.0f ? 1.0f : -1.0f));
+}
+
+float2 encodeNormalOctahedron(float3 n)
+{
+    float2 p = float2(n.x, n.y) * (1.0f / (abs(n.x) + abs(n.y) + abs(n.z)));
+    p = (n.z < 0.0f) ? octWrap(p) : p;
+    return p;
+}
+
+float3 decodeNormalOctahedron(float2 p)
+{
+    float3 n = float3(p.x, p.y, 1.0f - abs(p.x) - abs(p.y));
+    float2 tmp = (n.z < 0.0f) ? octWrap(float2(n.x, n.y)) : float2(n.x, n.y);
+    n.x = tmp.x;
+    n.y = tmp.y;
+    return normalize(n);
+}
+
+inline bool isValidTap(float4 centerGBuffer, float4 tapGBuffer)
+{
+    float3 centerNormal = decodeNormalOctahedron(centerGBuffer.xy);
+    float3 tapNormal = decodeNormalOctahedron(tapGBuffer.xy);
+    float centerDepth = centerGBuffer.w;
+    float tapDepth = tapGBuffer.w;
+    uint centerMaterial = asuint(centerGBuffer.z);
+    uint tapMaterial = asuint(tapGBuffer.z);
+
+	// Adjust depth difference epsilon based on view space normal
+    float dotViewNormal = abs(centerNormal.z);
+
+    const float depthRelativeDifferenceEpsilonMin = 0.03f;
+    const float depthRelativeDifferenceEpsilonMax = 0.2;
+    float depthRelativeDifferenceEpsilon = lerp(depthRelativeDifferenceEpsilonMax, depthRelativeDifferenceEpsilonMin, dotViewNormal);
+
+	// Check materials
+    if (centerMaterial != tapMaterial)
+        return false;
+
+	// Check depth
+    if (abs(1.0f - (tapDepth / centerDepth)) > depthRelativeDifferenceEpsilon)
+        return false;
+
+	// Check normals
+    const float dotNormalsEpsilon = 0.9f;
+    if (dot(tapNormal, centerNormal) < dotNormalsEpsilon)
+        return false;
+
+    return true;
+}
+
+float3 blurPassTent(int2 pixelPos, RWTexture2D<float4> inputBuffer, int2 direction)
+{
+	//return inputBuffer[pixelPos].rgb;
+    int2 offset;
+    float3 acc = 0.0f;
+    float weight = 0.0f;
+
+    float4 centerGBuffer = rtWindowBuffersRW[NORMAL_MATERIAL_DEPTH_INDEX][pixelPos];
+
+	[unroll]
+    for (int i = -11; i <= 11; ++i)
+    {
+        offset = pixelPos + direction * i;
+
+        float3 tapColor = inputBuffer[offset].rgb;
+        float4 tapGBuffer = rtWindowBuffersRW[NORMAL_MATERIAL_DEPTH_INDEX][offset];
+
+        if (isValidTap(centerGBuffer, tapGBuffer))
+        {
+            float tapWeight = 12 - abs(i);
+            acc += tapColor * tapWeight;
+            weight += tapWeight;
+        }
+    }
+
+    if (weight == 0.0f)
+        return 0.0f;
+
+    return acc / weight;
+}
+
 [shader("compute")]
 [numthreads(DENOISER_THREADGROUP_SIZE, DENOISER_THREADGROUP_SIZE, 1)]
 void Denoise(
     int2 groupID : SV_GroupID,
     int2 groupThreadID : SV_GroupThreadID,
-    int2 LaunchIndex : SV_DispatchThreadID)
+    int2 threadIdx : SV_DispatchThreadID)
 {
+    uint2 textureSize = uint2(gRootConstants.ax, gRootConstants.bx);
+    if (threadIdx.x >= textureSize.x || threadIdx.y >= textureSize.y)
+        return;
 
+    bool isHorizontalPass = gRootConstants.cx;
+    bool isEvenPass = gRootConstants.dx;
+    bool isLastPass = gRootConstants.ex;
+
+    int inputBufferIndex;
+    int outputBufferIndex;
+    if (isEvenPass)
+    {
+        inputBufferIndex = (isHorizontalPass ? RT_TEMP2_INDEX : RT_TEMP1_INDEX);
+        outputBufferIndex = (isHorizontalPass ? RT_TEMP1_INDEX : RT_RAW_OUTPUT_INDEX);
+    }
+    else
+    {
+        inputBufferIndex = (isHorizontalPass ? RT_RAW_OUTPUT_INDEX : RT_TEMP1_INDEX);
+        outputBufferIndex = (isHorizontalPass ? RT_TEMP1_INDEX : RT_TEMP2_INDEX);
+    }
+
+    RWTexture2D<float4> inputBuffer = rtWindowBuffersRW[inputBufferIndex];
+    RWTexture2D<float4> outputBuffer = rtWindowBuffersRW[outputBufferIndex];
+
+#if 1
+    int2 direction = isHorizontalPass ? int2(1, 0) : int2(0, 1);
+    float3 output = blurPassTent(threadIdx.xy, inputBuffer, direction);
+#else
+	float3 output;
+	if (!isLastPass) output = inputBuffer[threadIdx.xy];
+	else output = blurPassTent2D(threadIdx.xy, inputBuffer);
+#endif
+
+    if (isLastPass)
+    {
+        if (rtWindowBuffersRW[RT_RAW_OUTPUT_INDEX][threadIdx.xy].a != 0)
+            OutputBuffer[NonUniformResourceIndex(gData.drawingPosition + threadIdx.xy)] = float4(output, 1);
+    }
+    else
+        outputBuffer[threadIdx.xy] = float4(output, 1);
 }
 
 // =========================================================================
@@ -302,18 +425,6 @@ float3 offset_ray(const float3 p, const float3 n)
     return float3(abs(p.x) < origin ? p.x + float_scale * n.x : p_i.x,
 		abs(p.y) < origin ? p.y + float_scale * n.y : p_i.y,
 		abs(p.z) < origin ? p.z + float_scale * n.z : p_i.z);
-}
-
-float2 octWrap(float2 v)
-{
-    return float2((1.0f - abs(v.y)) * (v.x >= 0.0f ? 1.0f : -1.0f), (1.0f - abs(v.x)) * (v.y >= 0.0f ? 1.0f : -1.0f));
-}
-
-float2 ndirToOctSnorm(float3 n)
-{
-    float2 p = float2(n.x, n.y) * (1.0f / (abs(n.x) + abs(n.y) + abs(n.z)));
-    p = (n.z < 0.0f) ? octWrap(p) : p;
-    return p;
 }
 
 struct SurfaceData
@@ -472,7 +583,7 @@ void ClosestHit(inout HitInfo payload, Attributes attrib)
 		// This is primary hit
 
 		// Store G-Buffer
-        rtWindowBuffersRW[NORMAL_MATERIAL_DEPTH_INDEX][NonUniformResourceIndex(payload.pixelIndex)] = float4(ndirToOctSnorm(surfaceData.normal), asfloat(surfaceData.material.id), payload.hitT);
+        rtWindowBuffersRW[NORMAL_MATERIAL_DEPTH_INDEX][NonUniformResourceIndex(payload.pixelIndex)] = float4(encodeNormalOctahedron(surfaceData.normal), asfloat(surfaceData.material.id), payload.hitT);
 
         float2 u = float2(rand(payload.rng), rand(payload.rng));
 
@@ -584,5 +695,5 @@ void RayGen()
     float3 accumulatedResult = lerp(previousResult, currentResult, temporalAlpha);
     accumulationBuffer[LaunchIndex] = float4(accumulatedResult, (payload.hitT < 0 && payload.bounce == 0) ? 0 : 1);
     
-    OutputBuffer[NonUniformResourceIndex(gData.drawingPosition + LaunchIndex)] = accumulationBuffer[LaunchIndex];
+    //OutputBuffer[NonUniformResourceIndex(gData.drawingPosition + LaunchIndex)] = accumulationBuffer[LaunchIndex];
 }

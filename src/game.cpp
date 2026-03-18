@@ -47,6 +47,12 @@ void Game::KeyDown(WPARAM wParam) {
 	case 112: // p
 		mRTOn = !mRTOn;
 		return;
+	case 70: // F
+		mShowFPS = !mShowFPS;
+		return;
+	case 102: // f
+		mShowFPS = !mShowFPS;
+		return;
 	}
 
 	if (mGameState != GameState::RUNNING)
@@ -298,6 +304,7 @@ bool Game::Update(HWND hwnd, const float elapsedTime)
 			std::string controls = "Move:        [\x1B\x1A Keys]\nRotate:        [ENTER]\nDrop:          [SPACE]\nPause:           [ESC]";
 			controls += "\nSound " + std::string(mEnableSounds ? "off:" : "on: ") + "         [M]";
 			controls += "\nPath Tracing " + std::string(mRTOn ? "off:" : "on!:") + "  [P]";
+			controls += "\nShow FPS " + std::string(mShowFPS ? "off:" : "on :") + "      [F]";
 			mRenderer.AddString(controls, left, playingFieldTop + 3 * characterHeightRelative, glm::vec4(1, 1, 1, 1), glm::vec4(0, 0, 0, 0), true);
 		}
 
@@ -306,6 +313,18 @@ bool Game::Update(HWND hwnd, const float elapsedTime)
 		char scoreBuffer[80];
 		sprintf_s(scoreBuffer, " Score: %*i", spaces, mScore);
 		mRenderer.AddString(scoreBuffer, playingFieldLeft, playingFieldTop - characterHeightRelative);
+
+		// Draw FPS
+		if (mShowFPS)
+		{
+			int fps = int(1000.0f / elapsedTime);
+			const float a = 0.995f;
+			static float stableFps = fps;
+			stableFps = (a * stableFps + (1 - a) * fps);
+			char fpsBuffer[80];
+			sprintf_s(fpsBuffer, "FPS: %*i", 7, int(stableFps));
+			mRenderer.AddString(fpsBuffer, gameStatsLeft, playingFieldTop + characterHeightRelative * 3);
+		}
 
 		// Draw playing field
 		bool* highlightColorMask;
