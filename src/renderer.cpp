@@ -163,7 +163,7 @@ bool Renderer::Update(HWND hwnd, const float elapsedTime, unsigned int playingFi
 		mGameData.frameNumber = mFrameNumber;
 		mGameData.drawToScreen = rtOn ? 1 : 0;
 		glm::vec3 mAmbientColor = glm::vec3(1, 1, 1);
-		float mExposure = 0.7f;
+		float mExposure = 0.85f;
 		mGameData.ambientColor = mAmbientColor * mExposure;
 		mGameData.isFirstFrame = mIsFirstFrame;
 		mIsFirstFrame = false;

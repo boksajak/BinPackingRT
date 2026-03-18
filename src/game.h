@@ -138,7 +138,7 @@ private:
 
 	// Game Controls
 	bool mEnableSounds = true;
-	bool mRTOn = false;
+	bool mRTOn = true;
 
 	// Game state and input
 	enum class GameState {

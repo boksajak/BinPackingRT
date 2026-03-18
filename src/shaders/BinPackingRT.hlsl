@@ -1,4 +1,5 @@
 #include "shared.h"
+#include "brdf.h"
 
 // =========================================================================
 //   Resources
@@ -37,6 +38,60 @@ StructuredBuffer<Material> materialsBuffer : register(t2);
 RaytracingAccelerationStructure SceneBVH : register(t3);
 Buffer<float3> normalsBuffer : register(t4);
 RWTexture2D<float4> rtWindowBuffersRW[RT_WINDOW_BUFFERS_COUNT] : register(u0, space1);
+
+
+// -------------------------------------------------------------------------
+//    RNG
+// -------------------------------------------------------------------------
+
+// 32-bit Xorshift random number generator
+inline uint xorshift32(inout uint rngState)
+{
+    rngState ^= rngState << 13;
+    rngState ^= rngState >> 17;
+    rngState ^= rngState << 5;
+    return rngState;
+}
+
+// PCG Hash Function
+// Source: https://jcgt.org/published/0009/03/02/
+uint pcgHash(uint v)
+{
+    const uint state = v * 747796405u + 2891336453u;
+    const uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+// Converts unsigned integer into float int range <0; 1) by using 23 most significant bits for mantissa
+// Explanation: https://vectrx.substack.com/p/lcg-xs-fast-gpu-rng
+float uintToFloat(const uint x)
+{
+    return asfloat(0x3f800000 | (x >> 9)) - 1.0f;
+}
+
+// Initialize RNG
+uint initRNG(const uint linearIndex, const uint frameNumber)
+{
+    return pcgHash(linearIndex ^ pcgHash(frameNumber));
+}
+
+// Initialize RNG for given pixel and frame
+uint initRNG(const uint2 pixelCoords, const uint2 resolution, const uint frameNumber)
+{
+    return initRNG(dot(pixelCoords, uint2(1, resolution.x)), frameNumber);
+}
+
+// Generate random float in <0; 1) range
+float rand(inout uint rngState)
+{
+    return uintToFloat(xorshift32(rngState));
+}
+
+// Generate a random float in the range <-x; x)
+float randInRange(inout uint rng, float x)
+{
+    return (rand(rng) * 2.0f - 1.0f) * x;
+}
 
 // =========================================================================
 //   String Drawing
@@ -218,7 +273,7 @@ struct HitInfo
     float hitT;
     uint2 pixelIndex;
     uint offset;
-    uint pad;
+    uint rng;
     
     bool hasHit()
     {
@@ -249,27 +304,16 @@ float3 offset_ray(const float3 p, const float3 n)
 		abs(p.z) < origin ? p.z + float_scale * n.z : p_i.z);
 }
 
-float3x3 buildTBN(float3 normal)
+float2 octWrap(float2 v)
 {
-	// TODO: Maybe try approach from here (Building an Orthonormal Basis, Revisited): 
-	// https://graphics.pixar.com/library/OrthonormalB/paper.pdf
+    return float2((1.0f - abs(v.y)) * (v.x >= 0.0f ? 1.0f : -1.0f), (1.0f - abs(v.x)) * (v.y >= 0.0f ? 1.0f : -1.0f));
+}
 
-	// Pick random vector for generating orthonormal basis
-    static const float3 rvec1 = float3(0.847100675f, 0.207911700f, 0.489073813f);
-    static const float3 rvec2 = float3(-0.639436305f, -0.390731126f, 0.662155867f);
-    float3 rvec;
-
-    if (dot(rvec1, normal) > 0.95f)
-        rvec = rvec2;
-    else
-        rvec = rvec1;
-
-	// Construct TBN matrix to orient sampling hemisphere along the surface normal
-    float3 b1 = normalize(rvec - normal * dot(rvec, normal));
-    float3 b2 = cross(normal, b1);
-    float3x3 tbn = float3x3(b1, b2, normal);
-
-    return tbn;
+float2 ndirToOctSnorm(float3 n)
+{
+    float2 p = float2(n.x, n.y) * (1.0f / (abs(n.x) + abs(n.y) + abs(n.z)));
+    p = (n.z < 0.0f) ? octWrap(p) : p;
+    return p;
 }
 
 struct SurfaceData
@@ -278,6 +322,21 @@ struct SurfaceData
     float3 position;
     float3 normal;
 };
+
+MaterialProperties getMatProps(Material m)
+{
+    MaterialProperties result;
+
+    result.baseColor = m.albedo;
+    result.metalness = m.metalness;
+    result.roughness = m.roughness;
+    result.emissive = 0;
+    result.opacity = 1;
+    result.reflectance = 0.5f;
+    result.transmissivness = 0;
+    
+    return result;
+}
 
 float3 getSpectralSample(float u)
 {
@@ -288,9 +347,9 @@ SurfaceData loadSurfaceData(float2 attribUVs, uint instanceID, uint primitiveInd
 {
     SurfaceData result;
 
-    result.material = materialsBuffer[instanceID];
+    result.material = materialsBuffer[NonUniformResourceIndex(instanceID)];
     result.position = rayOrigin + rayDirection * hitT;
-    result.normal = normalsBuffer[primitiveIndex];
+    result.normal = normalsBuffer[NonUniformResourceIndex(primitiveIndex)];
 
 	// Calculate UVs
     float3 barycentrics = float3((1.0f - attribUVs.x - attribUVs.y), attribUVs.x, attribUVs.y);
@@ -370,6 +429,32 @@ SurfaceData loadSurfaceData(float2 attribUVs)
     return loadSurfaceData(attribUVs, InstanceID(), PrimitiveIndex(), WorldRayOrigin(), WorldRayDirection(), RayTCurrent());
 }
 
+void castSecondaryRay(float2 u, float3 V, SurfaceData surfaceData, inout HitInfo payload, int type)
+{
+    RayDesc ray;
+    ray.Origin = offset_ray(surfaceData.position, surfaceData.normal);
+    ray.TMin = 0.0f;
+    ray.TMax = PRIMARY_TMAX;
+    
+    float3 weight;
+    if (evalIndirectCombinedBRDF(u, surfaceData.normal, surfaceData.normal, V, getMatProps(surfaceData.material), type, ray.Direction, weight))
+    {
+        payload.throughput *= weight;
+        
+	    // Trace the ray
+        TraceRay(
+		    SceneBVH,
+		    RAY_FLAG_NONE,
+		    0xFF,
+		    0,
+		    0,
+		    0,
+		    ray,
+		    payload);
+    }
+}
+
+
 [shader("closesthit")]
 void ClosestHit(inout HitInfo payload, Attributes attrib)
 {
@@ -377,7 +462,36 @@ void ClosestHit(inout HitInfo payload, Attributes attrib)
     payload.hitT = RayTCurrent();
     payload.bounce++;
 
-    payload.result += surfaceData.material.albedo;
+    float3 V = -WorldRayDirection();
+
+	// Account for emissivness
+    payload.result += payload.throughput * surfaceData.material.emissive;
+		 
+    if (payload.bounce == 1)
+    {
+		// This is primary hit
+
+		// Store G-Buffer
+        rtWindowBuffersRW[NORMAL_MATERIAL_DEPTH_INDEX][NonUniformResourceIndex(payload.pixelIndex)] = float4(ndirToOctSnorm(surfaceData.normal), asfloat(surfaceData.material.id), payload.hitT);
+
+        float2 u = float2(rand(payload.rng), rand(payload.rng));
+
+        payload.throughput = 1;
+        castSecondaryRay(u, V, surfaceData, payload, SPECULAR_TYPE);
+        u = float2(rand(payload.rng), rand(payload.rng));
+        payload.throughput = 1;
+        castSecondaryRay(u, V, surfaceData, payload, DIFFUSE_TYPE);
+
+    }
+    else if (payload.bounce < MAX_BOUNCES)
+    {
+		// This is secondary hit
+        float p = rand(payload.rng);
+        float2 u = float2(rand(payload.rng), rand(payload.rng));
+
+        payload.throughput /= 0.5f;
+        castSecondaryRay(u, V, surfaceData, payload, (p > 0.5f) ? DIFFUSE_TYPE : SPECULAR_TYPE);
+    }
 
 }
 
@@ -418,7 +532,10 @@ void RayGen()
     ray.TMax = PRIMARY_TMAX;
 
     HitInfo payload = (HitInfo) 0;
-
+    
+    // Initialize RNG
+    payload.rng = initRNG(LaunchIndex, resolution, gData.frameNumber);
+    
     unsigned int historyLength = asuint(rtWindowBuffersRW[HISTORY_LENGTH_INDEX][LaunchIndex].r);
     bool isDisocclusion = (rtWindowBuffersRW[DISOCCLUSIONS_INDEX][LaunchIndex].r != 0);
     int rayCount = (isDisocclusion || historyLength < 42) ? 32 : 1;
