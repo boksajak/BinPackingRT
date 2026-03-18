@@ -42,10 +42,9 @@ struct StringData
 struct GameData
 {
 	// General
-	uint frameNumber;
 	uint outputWidth;
 	uint outputHeight;
-	uint pad;
+	float2 pad;
 
 	// Strings drawing
 	StringData strings[MAX_STRINGS_COUNT];
@@ -57,6 +56,23 @@ struct GameData
 	// Tonemapping
 	float3 colorBalance;
 	uint invertColors;
+
+	// Path Tracing
+	float4x4 view;
+
+	float3 cameraPosition;
+	float tanHalfFovY;
+
+	uint2 drawingPosition;
+	unsigned int frameNumber;
+	float accumulationAlpha;
+
+	float3 ambientColor;
+	unsigned int drawToScreen;
+
+	float horizontalStretch;
+	unsigned int isFirstFrame;
+	float2 pad3;
 };
 
 struct Material {

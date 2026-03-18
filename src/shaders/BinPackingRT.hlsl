@@ -218,7 +218,8 @@ struct HitInfo
     float hitT;
     uint2 pixelIndex;
     uint offset;
-
+    uint pad;
+    
     bool hasHit()
     {
         return hitT > 0.0f;
@@ -230,16 +231,168 @@ struct Attributes
     float2 uv;
 };
 
+float3 offset_ray(const float3 p, const float3 n)
+{
+    static const float origin = 1.0f / 32.0f;
+    static const float float_scale = 1.0f / 65536.0f;
+    static const float int_scale = 256.0f;
+
+    int3 of_i = int3(int_scale * n.x, int_scale * n.y, int_scale * n.z);
+
+    float3 p_i = float3(
+		asfloat(asint(p.x) + ((p.x < 0) ? -of_i.x : of_i.x)),
+		asfloat(asint(p.y) + ((p.y < 0) ? -of_i.y : of_i.y)),
+		asfloat(asint(p.z) + ((p.z < 0) ? -of_i.z : of_i.z)));
+
+    return float3(abs(p.x) < origin ? p.x + float_scale * n.x : p_i.x,
+		abs(p.y) < origin ? p.y + float_scale * n.y : p_i.y,
+		abs(p.z) < origin ? p.z + float_scale * n.z : p_i.z);
+}
+
+float3x3 buildTBN(float3 normal)
+{
+	// TODO: Maybe try approach from here (Building an Orthonormal Basis, Revisited): 
+	// https://graphics.pixar.com/library/OrthonormalB/paper.pdf
+
+	// Pick random vector for generating orthonormal basis
+    static const float3 rvec1 = float3(0.847100675f, 0.207911700f, 0.489073813f);
+    static const float3 rvec2 = float3(-0.639436305f, -0.390731126f, 0.662155867f);
+    float3 rvec;
+
+    if (dot(rvec1, normal) > 0.95f)
+        rvec = rvec2;
+    else
+        rvec = rvec1;
+
+	// Construct TBN matrix to orient sampling hemisphere along the surface normal
+    float3 b1 = normalize(rvec - normal * dot(rvec, normal));
+    float3 b2 = cross(normal, b1);
+    float3x3 tbn = float3x3(b1, b2, normal);
+
+    return tbn;
+}
+
+struct SurfaceData
+{
+    Material material;
+    float3 position;
+    float3 normal;
+};
+
+float3 getSpectralSample(float u)
+{
+    return saturate(float3(abs(u * 6.0f - 3.0f) - 1.0f, 2.0f - abs(u * 6.0f - 2.0f), 2.0f - abs(u * 6.0f - 4.0f)));
+}
+
+SurfaceData loadSurfaceData(float2 attribUVs, uint instanceID, uint primitiveIndex, float3 rayOrigin, float3 rayDirection, float hitT)
+{
+    SurfaceData result;
+
+    result.material = materialsBuffer[instanceID];
+    result.position = rayOrigin + rayDirection * hitT;
+    result.normal = normalsBuffer[primitiveIndex];
+
+	// Calculate UVs
+    float3 barycentrics = float3((1.0f - attribUVs.x - attribUVs.y), attribUVs.x, attribUVs.y);
+    float2 uv1;
+    float2 uv2;
+    float2 uv3;
+
+    if (PrimitiveIndex() % 2)
+    {
+        uv1 = float2(1, 0);
+        uv2 = float2(0, 1);
+        uv3 = float2(1, 1);
+    }
+    else
+    {
+        uv1 = float2(0, 0);
+        uv2 = float2(1, 0);
+        uv3 = float2(1, 1);
+    }
+
+    float2 pseudoUvs = uv1 * barycentrics.x + uv2 * barycentrics.y + uv3 * barycentrics.z;
+
+
+    if (InstanceID() == 0)
+    {
+        result.normal.xy = -result.normal.xy; //< Handle arena model as a special case (due to negative scaling, normals need adjustment)
+
+        bool isTopWall = (primitiveIndex == 0 || primitiveIndex == 1);
+        bool isRightWall = (primitiveIndex == 2 || primitiveIndex == 3);
+        bool isBottomWall = (primitiveIndex == 4 || primitiveIndex == 5);
+        bool isLeftWall = (primitiveIndex == 6 || primitiveIndex == 7);
+
+		// Insert some light to the arena walls
+		//if (isTopWall && pseudoUvs.y > 0.48 && pseudoUvs.y < 0.52) result.material.emissive = -float3(0.5, 1, 1);
+
+        if (isRightWall && pseudoUvs.y > 0.1 && pseudoUvs.y < 0.15)
+            result.material.emissive = float3(1, 0.5, 0.5);
+        if (isLeftWall && 1 - pseudoUvs.y > 0.1 && 1 - pseudoUvs.y < 0.15)
+            result.material.emissive = float3(1, 0.5, 0.5);
+
+        if (isRightWall && pseudoUvs.y > 0.25 && pseudoUvs.y < 0.3)
+            result.material.emissive = float3(1, 1, 0.5) * 0.8;
+        if (isLeftWall && 1 - pseudoUvs.y > 0.25 && 1 - pseudoUvs.y < 0.3)
+            result.material.emissive = float3(1, 1, 0.5) * 0.8;
+
+        if (isRightWall && pseudoUvs.y > 0.4 && pseudoUvs.y < 0.5)
+            result.material.emissive = float3(0.5, 0.5, 1);
+        if (isLeftWall && 1 - pseudoUvs.y > 0.4 && 1 - pseudoUvs.y < 0.5)
+            result.material.emissive = float3(0.5, 0.5, 1);
+
+        if (isBottomWall && pseudoUvs.y > 0.1 && pseudoUvs.y < 0.9 && pseudoUvs.x > 0.4 && pseudoUvs.x < 0.6)
+            result.material.emissive = getSpectralSample(pseudoUvs.y);
+
+        if (any(result.material.emissive) > 0)
+            result.material.id += 0x100;
+    }
+    else
+    {
+
+		// Create borders for blocks
+	
+        const float border = 0.05f;
+        if (pseudoUvs.x < border || pseudoUvs.y < border || 1 - pseudoUvs.x < border || 1 - pseudoUvs.y < border)
+        {
+            result.material.metalness = 0.9f;
+            result.material.roughness = 0.9f;
+            result.material.albedo = 0.2f;
+            result.material.id = 0xFF;
+        }
+    }
+
+    return result;
+}
+
+SurfaceData loadSurfaceData(float2 attribUVs)
+{
+    return loadSurfaceData(attribUVs, InstanceID(), PrimitiveIndex(), WorldRayOrigin(), WorldRayDirection(), RayTCurrent());
+}
+
 [shader("closesthit")]
 void ClosestHit(inout HitInfo payload, Attributes attrib)
 {
+    SurfaceData surfaceData = loadSurfaceData(attrib.uv, InstanceID(), PrimitiveIndex(), WorldRayOrigin(), WorldRayDirection(), RayTCurrent());
+    payload.hitT = RayTCurrent();
+    payload.bounce++;
+
+    payload.result += surfaceData.material.albedo;
 
 }
 
 [shader("miss")]
 void Miss(inout HitInfo payload)
 {
-
+    if (payload.bounce == 0)
+    {
+        payload.throughput = 0;
+    }
+    else
+    {
+        payload.result += payload.throughput * gData.ambientColor;
+    }
+    payload.hitT = -1.0f;
 }
 
 
@@ -251,7 +404,68 @@ void RayGen()
     if (LaunchIndex.x >= resolution.x || LaunchIndex.y >= resolution.y)
         return;
 
-    
-    DrawingBuffer[NonUniformResourceIndex(LaunchIndex)] = float4(1, 0, 1, 0);
+    float2 resolutionRcp = float2(asfloat(gRootConstants.cx), asfloat(gRootConstants.dx));
+    float2 d = (((LaunchIndex.xy + 0.5f) * resolutionRcp) * 2.f - 1.f);
+    float aspectRatio = (float(resolution.x) / float(resolution.y));
+	
+    aspectRatio *= gData.horizontalStretch; //< Squeeze horizontally
 
+	// Setup the ray
+    RayDesc ray;
+    ray.Origin = gData.cameraPosition;
+    ray.Direction = normalize((d.x * gData.view[0].xyz * gData.tanHalfFovY * aspectRatio) - (d.y * gData.view[1].xyz * gData.tanHalfFovY) + gData.view[2].xyz);
+    ray.TMin = PRIMARY_TMIN;
+    ray.TMax = PRIMARY_TMAX;
+
+    HitInfo payload = (HitInfo) 0;
+
+    unsigned int historyLength = asuint(rtWindowBuffersRW[HISTORY_LENGTH_INDEX][LaunchIndex].r);
+    bool isDisocclusion = (rtWindowBuffersRW[DISOCCLUSIONS_INDEX][LaunchIndex].r != 0);
+    int rayCount = (isDisocclusion || historyLength < 42) ? 32 : 1;
+	//int rayCount = asfloat(gRootConstants.fx) == 1 ? 32 : 1;
+    float3 totalResult = 0;
+
+    for (int i = 0; i < rayCount; i++)
+    {
+		// Trace the ray
+        payload.bounce = 0;
+        payload.throughput = 1.0f;
+        payload.result = 0.0f;
+        payload.pixelIndex = LaunchIndex;
+        payload.hitT = -1.0f;
+		//payload.offset = gData.frameNumber * rayCount + i;
+        payload.offset = gRootConstants.ex * rayCount + i;
+
+        TraceRay(
+			SceneBVH,
+			RAY_FLAG_NONE,
+			0xFF,
+			0,
+			0,
+			0,
+			ray,
+			payload);
+
+        totalResult += payload.result;
+    }
+
+    totalResult /= float(rayCount);
+
+	// Temporal accumulation
+    RWTexture2D<float4> accumulationBuffer = rtWindowBuffersRW[RT_RAW_OUTPUT_INDEX];
+    if (gData.isFirstFrame || isDisocclusion)
+        historyLength = 0;
+
+    float temporalAlpha = historyLength == 0 ? 1 : max(1.0f / 512.0f, 1.0f / float(historyLength));
+	//float temporalAlpha = asfloat(gRootConstants.fx);
+
+    historyLength += rayCount;
+    rtWindowBuffersRW[HISTORY_LENGTH_INDEX][LaunchIndex] = asfloat(historyLength);
+
+    float3 currentResult = totalResult;
+    float3 previousResult = accumulationBuffer[LaunchIndex].rgb;
+    float3 accumulatedResult = lerp(previousResult, currentResult, temporalAlpha);
+    accumulationBuffer[LaunchIndex] = float4(accumulatedResult, (payload.hitT < 0 && payload.bounce == 0) ? 0 : 1);
+    
+    OutputBuffer[NonUniformResourceIndex(gData.drawingPosition + LaunchIndex)] = accumulationBuffer[LaunchIndex];
 }

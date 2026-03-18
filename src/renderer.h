@@ -185,7 +185,6 @@ private:
 	AccelerationStructureBuffer	mTLAS;
 	uint64_t					mTlasSize;
 	D3D12_GPU_VIRTUAL_ADDRESS	mTlasGPUAddress;
-	D3D12_CPU_DESCRIPTOR_HANDLE	mTLASSrvHandle;
 
 	// Path tracing stuff
 	unsigned int				mRtFieldPixelsWidth;
@@ -213,6 +212,7 @@ private:
 	unsigned int	mFieldWidth;
 	unsigned int	mFieldHeight;
 	float			mHorizontalStretch = 0.83f;
+	bool            mIsFirstFrame = true;
 
 	AccelerationStructureBuffer createBottomLevelAS(ID3D12Resource* vertexBuffer, UINT verticesCount, UINT64 VertexBufferStrideInBytes, ID3D12Resource* indexBuffer, UINT indicesCount, DXGI_FORMAT indexBufferFormat);
 	void createBottomLevelAS(ModelData* data, D3D12ModelData* d3d12Data);
@@ -234,6 +234,13 @@ private:
 	void calculateRTWindowSize();
 	void createDisocclusionBuffer();
 	void createRaytracingPSO(IDxcBlob* programBlob);
+	void processChangedBlocksListToDisocclusionMap(std::vector<glm::ivec2>& differences);
+	void updateRayTracing();
+	void updateBlockDifferencesList();
+	D3D12_RAYTRACING_INSTANCE_DESC createRTInstanceDesc(const ModelInstance& model);
+	D3D12_RAYTRACING_INSTANCE_DESC createRTInstanceDesc(const ModelInstance& model, std::vector<Material>& materials);
+	D3D12_RAYTRACING_INSTANCE_DESC createRTInstanceDesc(const ModelInstance& model, Material* materials, size_t& materialsOffset);
+	void createTopLevelAS(std::vector<D3D12_RAYTRACING_INSTANCE_DESC>& instances);
 
 	// RT Window Buffers
 	enum class RtWindowBuffers {

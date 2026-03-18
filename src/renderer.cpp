@@ -10,10 +10,10 @@ enum class DescriptorHeapConstants {
 
 	// List of resources declared in the shader, as they appear in the descriptors heap
 	GameDataCB = 0,
-	FontAtlas,
-	StringsBuffer,
 	DrawingBuffer,
 	OutputBuffer,
+	FontAtlas,
+	StringsBuffer,	
 	MaterialsBuffer,
 	TLAS,
 	NormalsBuffer,
@@ -149,6 +149,25 @@ bool Renderer::Update(HWND hwnd, const float elapsedTime, unsigned int playingFi
 		mGameData.outputWidth = frameWidth;
 		mGameData.outputHeight = frameHeight;
 
+		// Update camera
+		glm::mat4 viewMatrix = glm::lookAtLH(glm::vec3(0, 0, 0), glm::vec3(0, 0, -1), glm::vec3(0, 1, 0));
+		glm::mat4 invViewMatrix = glm::inverse(viewMatrix);
+		glm::mat4 transposeInverseViewMatrix = glm::transpose(invViewMatrix);
+
+		mGameData.view = transposeInverseViewMatrix;
+		mGameData.cameraPosition = glm::vec3(10, 10, 38);
+		mGameData.tanHalfFovY = -float(playingFieldHeight / 2) / mGameData.cameraPosition.z;
+		mGameData.horizontalStretch = 1.0f / mHorizontalStretch;
+		mGameData.drawingPosition.x = rtFieldPosX;
+		mGameData.drawingPosition.y = rtFieldPosY;
+		mGameData.frameNumber = mFrameNumber;
+		mGameData.drawToScreen = rtOn ? 1 : 0;
+		glm::vec3 mAmbientColor = glm::vec3(1, 1, 1);
+		float mExposure = 0.7f;
+		mGameData.ambientColor = mAmbientColor * mExposure;
+		mGameData.isFirstFrame = mIsFirstFrame;
+		mIsFirstFrame = false;
+
 		uploadConstantBuffer();
 
 		mGameData.frameNumber++;
@@ -216,6 +235,12 @@ bool Renderer::Update(HWND hwnd, const float elapsedTime, unsigned int playingFi
 
 		if (rtOn)
 		{
+			// Update RT stuff
+			{
+				processChangedBlocksListToDisocclusionMap(blockDifferences);
+				updateRayTracing();
+			}
+
 			// Path tracing
 			{
 				// Dispatch rays
@@ -600,7 +625,7 @@ void Renderer::dispatchCompute2D(ID3D12PipelineState* pso, uint32_t dispatchWidt
 D3D12_CPU_DESCRIPTOR_HANDLE Renderer::getDescriptorHandle(UINT index)
 {
 	D3D12_CPU_DESCRIPTOR_HANDLE handle = mDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-	handle.ptr += (mRtvDescSize * index);
+	handle.ptr += (mCbvSrvUavDescSize * index);
 	return handle;
 }
 
@@ -820,7 +845,7 @@ void Renderer::createBuffers()
 		{
 			D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
 			uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-			mDevice->CreateUnorderedAccessView(mOutputBuffer, nullptr, &uavDesc, getDescriptorHandle(UINT(DescriptorHeapConstants::DrawingBuffer)));
+			mDevice->CreateUnorderedAccessView(mDrawingBuffer, nullptr, &uavDesc, getDescriptorHandle(UINT(DescriptorHeapConstants::DrawingBuffer)));
 		}
 	}
 }
@@ -1345,7 +1370,7 @@ void Renderer::updateMaterialsBuffer(Material* materialData, size_t materialsCou
 	transitionBarrier(mMaterialsBuffer, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
 
 	D3D12_SUBRESOURCE_DATA dataDesc = {};
-	dataDesc.pData = mStringData;
+	dataDesc.pData = materialData;
 	dataDesc.RowPitch = materialsCount * sizeof(Material);
 	dataDesc.SlicePitch = dataDesc.RowPitch;
 
@@ -1571,6 +1596,8 @@ void Renderer::createBottomLevelAS(ModelInstance& model) {
 
 void Renderer::createRtResources(FileSystem& fileSystem)
 {	
+	mIsFirstFrame = true;
+
 	createFontAtlas(32, 1, fileSystem);
 	createMaterialsBuffer();
 	calculateRTWindowSize();
@@ -1748,8 +1775,8 @@ void Renderer::createRaytracingPSO(IDxcBlob* programBlob)
 
 	// Add a state subobject for the shader payload configuration
 	D3D12_RAYTRACING_SHADER_CONFIG shaderDesc = {};
-	shaderDesc.MaxPayloadSizeInBytes = 16 + 4 + 8 + 12 + 8 + 4;	// TODO: Actual max size
-	shaderDesc.MaxAttributeSizeInBytes = D3D12_RAYTRACING_MAX_ATTRIBUTE_SIZE_IN_BYTES;
+	shaderDesc.MaxPayloadSizeInBytes = 64;
+	shaderDesc.MaxAttributeSizeInBytes = 8;
 
 	D3D12_STATE_SUBOBJECT shaderConfigObject = {};
 	shaderConfigObject.Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
@@ -1804,4 +1831,154 @@ void Renderer::createRaytracingPSO(IDxcBlob* programBlob)
 	// Get the RTPSO properties
 	hr = mRTPSO->QueryInterface(IID_PPV_ARGS(&mRTPSOInfo));
 	utils::validate(hr, L"Error: failed to get RTPSO info object!");
+}
+
+void Renderer::updateRayTracing()
+{
+	// Process model instances
+	std::vector<D3D12_RAYTRACING_INSTANCE_DESC> rtInstances;
+	mMaterialDataCurrentOffset = 0;
+
+	// Always put arena as the first instance
+	rtInstances.push_back(createRTInstanceDesc(mArenaInstance, mMaterialData, mMaterialDataCurrentOffset));
+	for (auto i : mInstances) rtInstances.push_back(createRTInstanceDesc(i, mMaterialData, mMaterialDataCurrentOffset));
+
+	// Build TLAS
+	createTopLevelAS(rtInstances);
+
+	// Create TLAS SRV
+	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+	srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
+	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	srvDesc.RaytracingAccelerationStructure.Location = mTlasGPUAddress;
+
+	mDevice->CreateShaderResourceView(nullptr, &srvDesc, getDescriptorHandle(UINT(DescriptorHeapConstants::TLAS)));
+
+	// Upload materials to GPU
+	updateMaterialsBuffer(mMaterialData, mMaterialDataCurrentOffset);
+
+	updateBlockDifferencesList();
+}
+
+void Renderer::createTopLevelAS(std::vector<D3D12_RAYTRACING_INSTANCE_DESC>& instances)
+{
+	uint32_t instanceBufferSize = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * (uint32_t)instances.size();
+	D3D12_GPU_VIRTUAL_ADDRESS instanceBufferGPUAddress = mTLASInstanceDescriptorsCache->GetGPUVirtualAddress();
+
+	// Copy the instance data to the buffer
+	D3D12_RANGE instanceBufferRange;
+	instanceBufferRange.Begin = 0;
+	instanceBufferRange.End = instanceBufferRange.Begin + instanceBufferSize;
+
+	UINT8* pData;
+	mTLASInstanceDescriptorsCache->Map(0, &instanceBufferRange, (void**)&pData);
+	memcpy(pData, instances.data(), instanceBufferSize);
+	mTLASInstanceDescriptorsCache->Unmap(0, &instanceBufferRange);
+
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAGS buildFlags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+
+	// Get the size requirements for the TLAS buffers
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS ASInputs = {};
+	ASInputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+	ASInputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+	ASInputs.InstanceDescs = instanceBufferGPUAddress;
+	ASInputs.NumDescs = (UINT)instances.size();
+	ASInputs.Flags = buildFlags;
+
+	D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO ASPreBuildInfo = {};
+	mDevice->GetRaytracingAccelerationStructurePrebuildInfo(&ASInputs, &ASPreBuildInfo);
+
+	ASPreBuildInfo.ResultDataMaxSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ResultDataMaxSizeInBytes);
+	ASPreBuildInfo.ScratchDataSizeInBytes = ALIGN(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT, ASPreBuildInfo.ScratchDataSizeInBytes);
+
+	// Set TLAS size
+	mTlasSize = ASPreBuildInfo.ResultDataMaxSizeInBytes;
+	mTlasGPUAddress = mTLASResultsCache->GetGPUVirtualAddress();
+
+	// Describe and build the TLAS
+	D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {};
+	buildDesc.Inputs = ASInputs;
+	buildDesc.ScratchAccelerationStructureData = mTLASScratchBuffersCache->GetGPUVirtualAddress();
+	buildDesc.DestAccelerationStructureData = mTlasGPUAddress;
+
+	mCmdList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+
+	// Wait for the TLAS build to complete
+	D3D12_RESOURCE_BARRIER uavBarrier;
+	uavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+	uavBarrier.UAV.pResource = mTLASResultsCache;
+	uavBarrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	mCmdList->ResourceBarrier(1, &uavBarrier);
+}
+
+void Renderer::updateBlockDifferencesList() {
+
+	// Transition the texture to a shader resource
+	transitionBarrier(mRtWindowBuffers[int(RtWindowBuffers::DISOCCLUSIONS)], D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+
+	D3D12_SUBRESOURCE_DATA textureData = {};
+	textureData.pData = mDisocclusionBufferData;
+	textureData.RowPitch = mRtFieldPixelsWidth * 16;
+	textureData.SlicePitch = textureData.RowPitch * mRtFieldPixelsHeight;
+
+	// Schedule a copy from the upload heap to the Texture2D resource
+	UpdateSubresources(mCmdList, mRtWindowBuffers[int(RtWindowBuffers::DISOCCLUSIONS)], mDisocclusionBufferUploadHeap, 0, 0, 1, &textureData);
+
+	// Transition the texture to a shader resource
+	transitionBarrier(mRtWindowBuffers[int(RtWindowBuffers::DISOCCLUSIONS)], D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+}
+
+D3D12_RAYTRACING_INSTANCE_DESC Renderer::createRTInstanceDesc(const ModelInstance& model) {
+
+	D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {};
+	instanceDesc.InstanceID = model.instanceId;
+	instanceDesc.InstanceContributionToHitGroupIndex = 0;
+	instanceDesc.InstanceMask = model.rtMask;
+	memcpy(&instanceDesc.Transform[0][0], &model.transform[0][0], sizeof(glm::mat3x4));
+	instanceDesc.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
+	instanceDesc.AccelerationStructure = model.d3d12Data->asBuffer.pResult->GetGPUVirtualAddress();
+
+	return instanceDesc;
+}
+
+D3D12_RAYTRACING_INSTANCE_DESC Renderer::createRTInstanceDesc(const ModelInstance& model, std::vector<Material>& materials) {
+
+	// Push instance material to correct place in the buffer
+	if (materials.size() <= model.instanceId) materials.resize(model.instanceId + 1);
+	materials[model.instanceId] = model.material;
+
+	return createRTInstanceDesc(model);
+}
+
+D3D12_RAYTRACING_INSTANCE_DESC Renderer::createRTInstanceDesc(const ModelInstance& model, Material* materials, size_t& materialsOffset) {
+
+	// Push instance material to correct place in the buffer
+	if (model.instanceId >= kMaxMaterials) utils::validate(E_FAIL, L"Your instance ID was too large due to materials count limit");
+
+	materialsOffset = std::max(materialsOffset, size_t(model.instanceId + 1));
+	materials[model.instanceId] = model.material;
+
+	return createRTInstanceDesc(model);
+}
+
+void Renderer::processChangedBlocksListToDisocclusionMap(std::vector<glm::ivec2>& differences) {
+
+	glm::ivec2 blockSize = glm::ivec2(mRtFieldPixelsWidth / float(mFieldWidth), mRtFieldPixelsHeight / float(mFieldHeight));
+	memset(mDisocclusionBufferData, 0, mRtFieldPixelsHeight * mRtFieldPixelsWidth * 4 * 4);
+
+	for (auto uv : differences) {
+
+		uv.x *= blockSize.x;
+		uv.y *= blockSize.y;
+
+		for (int i = uv.x - 3 * blockSize.x; i < uv.x + 4 * blockSize.x; i++) {
+			for (int j = uv.y - 3 * blockSize.y; j < uv.y + 4 * blockSize.y; j++) {
+
+				if (i >= 0 && i < int(mRtFieldPixelsWidth) && j >= 0 && j < int(mRtFieldPixelsHeight)) {
+					mDisocclusionBufferData[j * mRtFieldPixelsWidth + i] = glm::vec4(1, 1, 1, 1);
+				}
+			}
+		}
+	}
 }

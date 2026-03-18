@@ -178,6 +178,7 @@ private:
 	void pickNextColorScheme();
 	bool placeNewBlock();
 	void updateBlockDifferencesList();
+	void createTopLevelAS(std::vector<D3D12_RAYTRACING_INSTANCE_DESC>& instances);
 
 	static const unsigned int kRemovedLinesToLevelUp = 10;
 
