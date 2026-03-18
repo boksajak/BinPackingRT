@@ -248,8 +248,8 @@ private:
 
 	void createVertexBuffer(ID3D12Device* device, UINT64 verticesCount, UINT64 vertexSize, void* vertexData, D3D12_VERTEX_BUFFER_VIEW& vertexBufferView, ID3D12Resource*& vertexBuffer, std::wstring debugName = L"Vertex Buffer");
 	void createIndexBuffer(ID3D12Device* device, UINT64 indicesCount, UINT64 indexSize, DXGI_FORMAT indexFormat, void* indexData, D3D12_INDEX_BUFFER_VIEW& indexBufferView, ID3D12Resource*& indexBuffer, std::wstring debugName = L"Index Buffer");
-	void createNormalsBuffer(const std::vector<glm::vec3>& normals);
-	std::vector<glm::vec3> createNormals(ModelData modelData);
+	void createNormalsBuffer(const std::vector<glm::vec4>& normals);
+	std::vector<glm::vec4> createNormals(ModelData modelData);
 
 	void createModelBuffers(ModelData* data, D3D12ModelData* d3d12Data, std::wstring debugName = L"3D Model");
 	void createModelBuffers(ModelInstance& model, std::wstring debugName = L"3D Model");

@@ -36,7 +36,7 @@ Buffer<uint> stringsBuffer : register(t1);
 // RT rendering
 StructuredBuffer<Material> materialsBuffer : register(t2);
 RaytracingAccelerationStructure SceneBVH : register(t3);
-Buffer<float3> normalsBuffer : register(t4);
+StructuredBuffer<float4> normalsBuffer : register(t4);
 RWTexture2D<float4> rtWindowBuffersRW[RT_WINDOW_BUFFERS_COUNT] : register(u0, space1);
 
 
@@ -460,7 +460,7 @@ SurfaceData loadSurfaceData(float2 attribUVs, uint instanceID, uint primitiveInd
 
     result.material = materialsBuffer[NonUniformResourceIndex(instanceID)];
     result.position = rayOrigin + rayDirection * hitT;
-    result.normal = normalsBuffer[NonUniformResourceIndex(primitiveIndex)];
+    result.normal = normalsBuffer[NonUniformResourceIndex(primitiveIndex)].xyz;
 
 	// Calculate UVs
     float3 barycentrics = float3((1.0f - attribUVs.x - attribUVs.y), attribUVs.x, attribUVs.y);

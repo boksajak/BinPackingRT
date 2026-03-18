@@ -1507,8 +1507,8 @@ void Renderer::createModelBuffers(ModelInstance& model, std::wstring debugName)
 	createModelBuffers(model.data, model.d3d12Data, debugName);
 }
 
-std::vector<glm::vec3> Renderer::createNormals(ModelData modelData) {
-	std::vector<glm::vec3> result;
+std::vector<glm::vec4> Renderer::createNormals(ModelData modelData) {
+	std::vector<glm::vec4> result;
 
 	for (size_t i = 0; i < modelData.indicesCount / 3; i++) {
 		glm::vec3 a = modelData.vertices[modelData.indices[i * 3 + 0]];
@@ -1519,18 +1519,18 @@ std::vector<glm::vec3> Renderer::createNormals(ModelData modelData) {
 		glm::vec3 ac = glm::normalize(c - a);
 		glm::vec3 n = glm::normalize(glm::cross(ac, ab));
 
-		result.push_back(n);
+		result.push_back(glm::vec4(n, 0));
 	}
 
 	return result;
 }
 
-void Renderer::createNormalsBuffer(const std::vector<glm::vec3>& normals) {
+void Renderer::createNormalsBuffer(const std::vector<glm::vec4>& normals) {
 
 	mNormalsBufferLength = (UINT)normals.size();
 
 	// Allocate mNormalsBuffer
-	createBuffer(mDevice, D3D12_HEAP_TYPE_DEFAULT, 0, normals.size() * sizeof(glm::vec3), D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, &mNormalsBuffer);
+	createBuffer(mDevice, D3D12_HEAP_TYPE_DEFAULT, 0, normals.size() * sizeof(glm::vec4), D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, &mNormalsBuffer);
 
 	// Create upload heap
 	const UINT64 uploadBufferSize = GetRequiredIntermediateSize(mNormalsBuffer, 0, 1);
@@ -1538,7 +1538,7 @@ void Renderer::createNormalsBuffer(const std::vector<glm::vec3>& normals) {
 
 	D3D12_SUBRESOURCE_DATA normalsDataDesc = {};
 	normalsDataDesc.pData = normals.data();
-	normalsDataDesc.RowPitch = normals.size() * sizeof(glm::vec3);
+	normalsDataDesc.RowPitch = normals.size() * sizeof(glm::vec4);
 	normalsDataDesc.SlicePitch = normalsDataDesc.RowPitch;
 
 	// Schedule a copy from the upload heap to the Buffer resource
@@ -1552,7 +1552,7 @@ void Renderer::createNormalsBuffer(const std::vector<glm::vec3>& normals) {
 	srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
 	srvDesc.Buffer.FirstElement = 0;
 	srvDesc.Buffer.NumElements = normals.size();
-	srvDesc.Buffer.StructureByteStride = sizeof(glm::vec3);
+	srvDesc.Buffer.StructureByteStride = sizeof(glm::vec4);
 	srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
 	mDevice->CreateShaderResourceView(mNormalsBuffer, &srvDesc, getDescriptorHandle(UINT(DescriptorHeapConstants::NormalsBuffer)));
